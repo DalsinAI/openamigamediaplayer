@@ -1427,6 +1427,26 @@ static void set_volume(int v)
     draw_seek();
 }
 
+/* The film has reached frame f: move the slider, and at the last frame go
+ * on to the next item, or stop, unless Repeat is on. TRUE when the item
+ * changed. */
+static int at_frame(int f)
+{
+    if (f == frame) return 0;
+    frame = f;
+    dbg("frame %d", frame);
+    draw_seek();
+    if (playing && !repeat_on && frames > 1 && frame >= frames - 1) {
+        if (cur < nitems - 1) {
+            step(1, 1);
+            return 1;
+        }
+        playing = 0;
+        draw_tools();
+    }
+    return 0;
+}
+
 static void dt_update(struct TagItem *tags)
 {
     struct TagItem *ti, *state = tags;
@@ -1444,14 +1464,7 @@ static void dt_update(struct TagItem *tags)
             }
             break;
         case ADTA_Frame:
-            frame = (int)ti->ti_Data;
-            dbg("frame %d", frame);
-            draw_seek();
-            /* the last frame: on to the next item, or the start again with Repeat */
-            if (playing && !repeat_on && frames > 1 && frame >= frames - 1 && cur < nitems - 1) {
-                step(1, 1);
-                return;
-            }
+            if (at_frame((int)ti->ti_Data)) return;
             break;
         }
     }
@@ -1464,8 +1477,10 @@ static int main_event(struct IntuiMessage *m)
     UWORD code = m->Code, qual = m->Qualifier;
     APTR ia = m->IAddress;
     int mx = m->MouseX, my = m->MouseY, idx, r, i;
-    if (cl == IDCMP_IDCMPUPDATE && dto && FindTagItem(GA_ID, (struct TagItem *)ia) &&
-        GetTagData(GA_ID, 0, (struct TagItem *)ia) == GID_DT) {
+    /* the datatype's news; animation.datatype may leave GA_ID out */
+    if (cl == IDCMP_IDCMPUPDATE && dto &&
+        (FindTagItem(GA_ID, (struct TagItem *)ia) ? GetTagData(GA_ID, 0, (struct TagItem *)ia) == GID_DT
+                                                  : FindTagItem(ADTA_Frame, (struct TagItem *)ia) || FindTagItem(DTA_Sync, (struct TagItem *)ia))) {
         struct TagItem *copy = CloneTagItems((struct TagItem *)ia);
         GT_ReplyIMsg(m);
         if (copy) { dt_update(copy); FreeTagItems(copy); }
@@ -1486,6 +1501,12 @@ static int main_event(struct IntuiMessage *m)
         if (pending_play && dto && ++pending_ticks >= 10) {
             pending_play = 0;
             DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
+        }
+        /* animation.datatype 47 doesn't always say which frame it is on:
+         * ask it, so the slider and the buttons follow the film */
+        if (playing && !pending_play && kind == K_VIDEO && dto) {
+            ULONG f = 0;
+            if (GetDTAttrs(dto, ADTA_Frame, (ULONG)&f, TAG_DONE) && at_frame((int)f)) break;
         }
         if (playing && kind == K_PICTURE && ++slide_ticks >= SLIDE_TICKS) {
             slide_ticks = 0;
