@@ -1,0 +1,27 @@
+Short:        Media player for every datatype
+Uploader:     (We fill this in at upload time)
+Author:       Dalsin Limited
+Type:         mus/play
+Version:      0.1
+Architecture: m68k-amigaos >= 3.2.0
+Distribution: Aminet
+
+OpenPlay plays anything a datatype opens: pictures as a slideshow, sounds,
+tunes and modules, and films, from one window with a playlist. A new
+datatype is a new format for OpenPlay, with nothing else to install.
+
+It is drawn with OpenGadTools in your OpenLook theme, light or dark, with
+its buttons as icons and text, icons, or text. Files and drawers dropped on
+the window join the playlist; playlists save and open as .opl and .m3u.
+"About this file" says which datatype opened it and what decoded it.
+
+With the Open datatypes and a services card or a paired Cradle (the
+Nursery), it plays AVIF, HEIC, JPEG XL, WebP, FLAC, Ogg, MP3 and more. On an
+AGA Amiga, Save CDXL turns a film into a CDXL the chipset plays by itself.
+
+Requires AmigaOS 3.2 and a 68020 or better.
+
+Licence: MIT, Copyright (c) 2026 Dalsin Limited. If you build on it, we ask
+that you credit Dalsin Limited and AmigaChrome.
+
+Source: https://github.com/DalsinAI/openamigamediaplayer
