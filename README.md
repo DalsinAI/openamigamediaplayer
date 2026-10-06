@@ -13,7 +13,9 @@ off the datatypes and the new opengadtools interface and open rtg".
   it (this Amiga, or the Nursery: the services card or a paired Cradle).
 - **Buttons as icons and text, icons, or text,** from OpenPrefs Look, View ›
   Buttons, or a `BUTTONS=` ToolType (Open Apps Look and Feel).
-- **Pictures play as a slideshow;** sounds and films play, pause and stop.
+- **Pictures play as a slideshow;** sounds and films play, pause and stop
+  (DTM_TRIGGER), with a volume bar (SDTA_Volume), seeking in films
+  (ADTA_Frame) and Repeat (DTA_Repeat).
 - **About this file** shows the datatype, the decoder, the screen and the
   time it took to open, and copies it to the clipboard.
 - **Full screen** on a screen of its own (OpenRTG scales it on the board),
@@ -31,11 +33,13 @@ openvideo.datatype (openamigaimage).
 
 ## Building
 
-    OGT=path/to/opengadtools ./build.sh      # build/os3/OpenPlay
+    ./build.sh      # build/os3/OpenPlay
 
-It needs the os32 stove (m68k-amigaos-gcc, NDK 3.2) and OpenGadTools' sources
-(`DalsinAI/opengadtools`, with the player icons). 68020 and up, integer maths
-only. OpenUp installs it as a part (SYS:Utilities/OpenPlay).
+It needs the os32 stove (m68k-amigaos-gcc, NDK 3.2). OpenGadTools' library is
+copied into `third_party/opengadtools` (`FROM` says which commit); OpenPlay
+draws its own player icons (`app/op_icons.c`) until OpenGadTools has them.
+68020 and up, integer maths only. OpenUp installs it as a part
+(SYS:Utilities/OpenPlay).
 
 ## Using it
 
@@ -44,7 +48,7 @@ only. OpenUp installs it as a part (SYS:Utilities/OpenPlay).
 From Workbench: double-click it, shift-click files with it, or drop files on
 its window. Keys: O open, P or Space play/pause, T or Esc stop, V and N (or
 the cursor keys) previous and next, R repeat, F full screen, L playlist,
-I about this file, C save CDXL, A add, M remove.
+I about this file, C save CDXL, A add, M remove, + and - volume.
 
 `OPENPLAY_DEBUG` set to a file's name writes a line for each step there.
 

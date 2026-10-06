@@ -63,6 +63,7 @@
 #include "ogt_toolbar.h"
 
 #include "op_stack.h"
+#include "op_icons.h"
 
 #define VERSION_TEXT "OpenPlay 0.1 (6.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
@@ -93,19 +94,25 @@ enum { C_OPEN = 1, C_PREV, C_PLAY, C_STOP, C_NEXT, C_REPEAT, C_FULL, C_LIST, C_I
        C_ADD, C_REMOVE, C_SAVELIST, C_CLEAR, C_ABOUT, C_QUIT, C_OWNSCREEN,
        C_BT_LOOK, C_BT_BOTH, C_BT_ICONS, C_BT_TEXT };
 
+/* The toolbar draws the buttons and their names; OpenPlay draws the
+ * player icons on them (op_icons) until OpenGadTools has its own. */
 static ogt_tool tools[] = {
-    { C_OPEN, "Open", OGT_ICON_OPEN, 0, 0, 0 },
-    { C_PREV, "Previous", OGT_ICON_PREV, 1, 0, 0 },
-    { C_PLAY, "Play", OGT_ICON_PLAY, 0, 0, 1 },
-    { C_STOP, "Stop", OGT_ICON_STOP, 0, 0, 0 },
-    { C_NEXT, "Next", OGT_ICON_NEXT, 0, 0, 0 },
-    { C_REPEAT, "Repeat", OGT_ICON_REPEAT, 1, 0, 0 },
-    { C_FULL, "Full screen", OGT_ICON_FULLSCREEN, 0, 0, 0 },
-    { C_LIST, "Playlist", OGT_ICON_PLAYLIST, 1, 0, 0 },
-    { C_INFO, "Info", OGT_ICON_INFO, 0, 0, 0 },
-    { C_CDXL, "Save CDXL", OGT_ICON_CONVERT, 0, 0, 0 },
+    { C_OPEN, "Open", OGT_ICON_NONE, 0, 0, 0 },
+    { C_PREV, "Previous", OGT_ICON_NONE, 1, 0, 0 },
+    { C_PLAY, "Play", OGT_ICON_NONE, 0, 0, 1 },
+    { C_STOP, "Stop", OGT_ICON_NONE, 0, 0, 0 },
+    { C_NEXT, "Next", OGT_ICON_NONE, 0, 0, 0 },
+    { C_REPEAT, "Repeat", OGT_ICON_NONE, 1, 0, 0 },
+    { C_FULL, "Full screen", OGT_ICON_NONE, 0, 0, 0 },
+    { C_LIST, "Playlist", OGT_ICON_NONE, 1, 0, 0 },
+    { C_INFO, "Info", OGT_ICON_NONE, 0, 0, 0 },
+    { C_CDXL, "Save CDXL", OGT_ICON_NONE, 0, 0, 0 },
 };
 #define NTOOLS ((int)(sizeof tools / sizeof tools[0]))
+static int tool_icon[NTOOLS] = { OP_ICON_OPEN, OP_ICON_PREV, OP_ICON_PLAY, OP_ICON_STOP, OP_ICON_NEXT, OP_ICON_REPEAT,
+                                 OP_ICON_FULLSCREEN, OP_ICON_PLAYLIST, OP_ICON_INFO, OP_ICON_CONVERT };
+#define TB_PADX 6           /* ogt_toolbar's own spacing, to put the icons where it would */
+#define TB_PADY 3
 /* The key for each, shown in the help line: Open Apps Look and Feel, Keys. */
 static const char *const tool_keys[NTOOLS] = { "O", "V or Left", "P or Space", "T or Esc", "N or Right", "R", "F", "L", "I", "C" };
 
@@ -175,10 +182,10 @@ static struct AppWindow *appwin;
 
 static int bt_choice = -1;          /* -1 as in Look prefs, else OGT_TB_* */
 static int bt_forced = -1;          /* a ToolType or BUTTONS= */
-static int show_list = 1, repeat_on, want_own;
+static int show_list = 1, repeat_on, want_own, volume = 64;
 static int win_box[4];              /* the place last remembered */
 
-static struct { int x, y, w, h; } media_box, seek_box, status_box, side_box, head_box;
+static struct { int x, y, w, h; } media_box, seek_box, status_box, side_box, head_box, bar_box, vol_box;
 static int tb_y;
 
 #define GID_DT 50
@@ -384,21 +391,54 @@ static void load_look(void)
     theme_mode = mode;
 }
 
+/* "icons+text" (or BOTH), "icons" or "text" as OGT_TB_*, else -1. */
+static int parse_buttons(const char *s)
+{
+    char w[16];
+    int n = 0;
+    while (s && (*s == ' ' || *s == '\t' || *s == '=')) s++;
+    while (s && *s && *s != ' ' && *s != '\t' && *s != '\n' && *s != '\r' && n < (int)sizeof w - 1) {
+        char ch = *s++;
+        w[n++] = (char)(ch >= 'A' && ch <= 'Z' ? ch - 'A' + 'a' : ch);
+    }
+    w[n] = 0;
+    if (!strcmp(w, "icons+text") || !strcmp(w, "both") || !strcmp(w, "icons-text")) return OGT_TB_ICONS_TEXT;
+    if (!strcmp(w, "icons")) return OGT_TB_ICONS;
+    if (!strcmp(w, "text")) return OGT_TB_TEXT;
+    return -1;
+}
+
+/* Look prefs' proposed "buttons" line (Open Apps Look and Feel), read here
+ * until OpenGadTools reads it for every app. */
+static int look_buttons(void)
+{
+    char *text = load_text("ENV:OpenGadTools/Look"), *l;
+    int style = OGT_TB_ICONS_TEXT;
+    for (l = text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
+        if (!strncmp(l, "buttons", 7) && (l[7] == ' ' || l[7] == '\t')) {
+            int b = parse_buttons(l + 7);
+            if (b >= 0) style = b;
+        }
+    free(text);
+    return style;
+}
+
 /* The Buttons style: a ToolType or BUTTONS= wins, then View > Buttons, then Look prefs. */
 static int buttons_style(void)
 {
     if (bt_forced >= 0) return bt_forced;
     if (bt_choice >= 0) return bt_choice;
-    return ogt_buttons_style();
+    return look_buttons();
 }
 
 static void load_prefs(void)
 {
     char buf[256], *p;
-    if (read_small("ENV:" PREFS_DIR "/Buttons", buf, sizeof buf)) bt_choice = ogt_buttons_parse(buf);
+    if (read_small("ENV:" PREFS_DIR "/Buttons", buf, sizeof buf)) bt_choice = parse_buttons(buf);
     if (read_small("ENV:" PREFS_DIR "/Playlist", buf, sizeof buf)) show_list = buf[0] != '0';
     if (read_small("ENV:" PREFS_DIR "/Repeat", buf, sizeof buf)) repeat_on = buf[0] == '1';
     if (read_small("ENV:" PREFS_DIR "/OwnScreen", buf, sizeof buf)) want_own = buf[0] == '1';
+    if (read_small("ENV:" PREFS_DIR "/Volume", buf, sizeof buf)) { volume = atoi(buf); if (volume < 0 || volume > 64) volume = 64; }
     if (read_small("ENV:" PREFS_DIR "/Window", buf, sizeof buf)) {
         int i;
         p = buf;
@@ -414,6 +454,8 @@ static void save_prefs(void)
     write_small("Playlist", show_list ? "1\n" : "0\n");
     write_small("Repeat", repeat_on ? "1\n" : "0\n");
     write_small("OwnScreen", want_own ? "1\n" : "0\n");
+    snprintf(buf, sizeof buf, "%d\n", volume);
+    write_small("Volume", buf);
     if (win && !own_scr) {
         snprintf(buf, sizeof buf, "%d %d %d %d\n", win->LeftEdge, win->TopEdge, win->Width, win->Height);
         write_small("Window", buf);
@@ -562,11 +604,24 @@ static void draw_seek(void)
         snprintf(a, sizeof a, "%d of %d", cur + 1, nitems);
         filled = nitems > 1 ? cur * 1000 / (nitems - 1) : 1000;
     }
+    bar_box.w = 0;
+    /* the volume, at the right, for sound and films: SDTA_Volume, 0 to 64 */
+    vol_box.w = 0;
+    if (kind == K_SOUND || kind == K_VIDEO) {
+        int vw = 64, vx = x + w - vw, vy = seek_box.y + seek_box.h / 2 - 4;
+        ogt_text(rp, pen("muted"), vx - ogt_text_width(rp, "Volume") - 6, seek_box.y + (seek_box.h - fh) / 2, "Volume", 0);
+        ogt_box(rp, pen("string"), vx, vy, vw, 9);
+        ogt_frame(rp, pen("string.shadow"), vx, vy, vw, 9);
+        if (volume > 0) ogt_fill(&ctx, rp, "fill", vx + 1, vy + 1, (vw - 2) * volume / 64, 7);
+        vol_box.x = vx; vol_box.y = seek_box.y; vol_box.w = vw; vol_box.h = seek_box.h;
+        w -= vw + ogt_text_width(rp, "Volume") + 18;
+    }
     if (!a[0]) return;
     ogt_text(rp, pen("label"), x, seek_box.y + (seek_box.h - fh) / 2, a, 0);
     bx = x + ogt_text_width(rp, "00:00 of 000") + 8;
     bw = w - (bx - x) - ogt_text_width(rp, "00:00") - 12;
     if (bw < 20) return;
+    bar_box.x = bx; bar_box.y = seek_box.y; bar_box.w = bw; bar_box.h = seek_box.h;
     {
         int by = seek_box.y + seek_box.h / 2 - 4, kx;
         ogt_box(rp, pen("string"), bx, by, bw, 9);
@@ -583,12 +638,12 @@ static int row_h(void *user, int i) { (void)user; (void)i; return fh + 6; }
 
 static void draw_row(void *user, int i, struct RastPort *rp, int x, int y, int w, int h, int sel)
 {
-    static const int kicon[] = { OGT_ICON_FILE, OGT_ICON_SLIDESHOW, OGT_ICON_PLAY, OGT_ICON_FULLSCREEN, OGT_ICON_FILE, OGT_ICON_FILE, OGT_ICON_FILE };
+    static const int kicon[] = { OP_ICON_FILE, OP_ICON_SLIDESHOW, OP_ICON_SOUND, OP_ICON_FILM, OP_ICON_FILE, OP_ICON_FILE, OP_ICON_FILE };
     int s = fh, now = i == cur;
     (void)user;
     if (sel) ogt_box(rp, pen("accent"), x, y, w, h);
     else ogt_fill(&ctx, rp, (i & 1) ? "list.alternate" : "list", x, y, w, h);
-    ogt_icon_draw(&ctx, rp, kicon[items[i].kind], x + 3, y + (h - s) / 2, s, 0);
+    op_icon_draw(&ctx, rp, kicon[items[i].kind], x + 3, y + (h - s) / 2, s, 0);
     ogt_bold(rp, now);
     ogt_text(rp, pen(sel ? "accent.text" : "text"), x + s + 8, y + (h - fh) / 2, base_name(items[i].path), w - s - 12);
     ogt_bold(rp, 0);
@@ -625,13 +680,26 @@ static void draw_media_back(void)
     }
 }
 
+/* A button, then its icon where ogt_toolbar would put one. */
+static void draw_one(int i, int down)
+{
+    int x = tb.box[i].x, y = tb.box[i].y, w = tb.box[i].w, h = tb.box[i].h, s = tb.icon_size;
+    ogt_toolbar_draw_one(&tb, &ctx, win->RPort, i, down, "window");
+    if (!w) return;
+    switch (tb.style) {
+    case OGT_TB_TEXT: break;
+    case OGT_TB_INLINE: op_icon_draw(&ctx, win->RPort, tool_icon[i], x + TB_PADX, y + (h - s) / 2, s, tb.tool[i].disabled); break;
+    default: op_icon_draw(&ctx, win->RPort, tool_icon[i], x + (w - s) / 2, y + TB_PADY + 1, s, tb.tool[i].disabled); break;
+    }
+}
+
 static void draw_tools(void)
 {
     int i;
     for (i = 0; i < tb.n; i++)
         if (tb.tool[i].id == C_PLAY) {
-            tb.tool[i].label = playing ? (kind == K_PICTURE ? "Pause" : "Pause") : (kind == K_PICTURE ? "Slideshow" : "Play");
-            tb.tool[i].icon = playing ? OGT_ICON_PAUSE : (kind == K_PICTURE ? OGT_ICON_SLIDESHOW : OGT_ICON_PLAY);
+            tb.tool[i].label = playing ? "Pause" : (kind == K_PICTURE ? "Slideshow" : "Play");
+            tool_icon[i] = playing ? OP_ICON_PAUSE : (kind == K_PICTURE ? OP_ICON_SLIDESHOW : OP_ICON_PLAY);
         }
     ogt_toolbar_enable(&tb, C_PREV, nitems > 1);
     ogt_toolbar_enable(&tb, C_NEXT, nitems > 1);
@@ -641,10 +709,12 @@ static void draw_tools(void)
     ogt_toolbar_enable(&tb, C_INFO, dto != NULL);
     ogt_toolbar_enable(&tb, C_CDXL, dto != NULL && kind == K_VIDEO);
     ogt_fill(&ctx, win->RPort, "window", win->BorderLeft, tb_y, win->Width - win->BorderLeft - win->BorderRight, tb.h);
-    ogt_toolbar_draw(&tb, &ctx, win->RPort, "window");
-    for (i = 0; i < tb.n; i++)                  /* toggles drawn pressed while on */
-        if ((tb.tool[i].id == C_REPEAT && repeat_on) || (tb.tool[i].id == C_LIST && show_list))
-            ogt_toolbar_draw_one(&tb, &ctx, win->RPort, i, 1, "window");
+    for (i = 0; i < tb.n; i++) {
+        if (tb.tool[i].sep_before && i && tb.box[i].w)
+            ogt_vline(win->RPort, pen("group.line"), tb.box[i].x - 9 / 2 - 1, tb.box[i].y + 4, tb.box[i].h - 8);
+        /* toggles drawn pressed while on */
+        draw_one(i, i == tb.pressed || (tb.tool[i].id == C_REPEAT && repeat_on) || (tb.tool[i].id == C_LIST && show_list));
+    }
     ogt_hline(win->RPort, pen("group.line"), win->BorderLeft, tb_y + tb.h + 2, win->Width - win->BorderLeft - win->BorderRight);
 }
 
@@ -866,6 +936,8 @@ static void show_item(int i, int play)
     }
     describe();
     dbg("opened kind %d base %s", kind, dt_base);
+    if (kind == K_SOUND || kind == K_VIDEO)
+        SetAttrs(dto, SDTA_Volume, (ULONG)volume, DTA_Repeat, (ULONG)repeat_on, TAG_DONE);
     AddDTObject(win, NULL, dto, -1);
     dbg("added");
     draw_all();
@@ -1324,7 +1396,12 @@ static int command(int c)
     case C_NEXT: step(1, playing || kind != K_PICTURE); break;
     case C_PLAY: play_pause(); break;
     case C_STOP: stop(); break;
-    case C_REPEAT: repeat_on = !repeat_on; set_menu_checks(); draw_tools(); break;
+    case C_REPEAT:
+        repeat_on = !repeat_on;
+        if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, win, NULL, DTA_Repeat, (ULONG)repeat_on, TAG_DONE);
+        set_menu_checks();
+        draw_tools();
+        break;
     case C_LIST: show_list = !show_list; set_menu_checks(); relayout_and_draw(); break;
     case C_FULL: full_screen(); break;
     case C_INFO: info_window(); break;
@@ -1341,6 +1418,13 @@ static int command(int c)
     case C_BT_TEXT: bt_choice = OGT_TB_TEXT; set_menu_checks(); relayout_and_draw(); break;
     }
     return 0;
+}
+
+static void set_volume(int v)
+{
+    volume = v < 0 ? 0 : v > 64 ? 64 : v;
+    if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, win, NULL, SDTA_Volume, (ULONG)volume, TAG_DONE);
+    draw_seek();
 }
 
 static void dt_update(struct TagItem *tags)
@@ -1364,7 +1448,7 @@ static void dt_update(struct TagItem *tags)
             dbg("frame %d", frame);
             draw_seek();
             /* the last frame: on to the next item, or the start again with Repeat */
-            if (playing && frames > 1 && frame >= frames - 1 && nitems > 1 && (cur < nitems - 1 || repeat_on)) {
+            if (playing && !repeat_on && frames > 1 && frame >= frames - 1 && cur < nitems - 1) {
                 step(1, 1);
                 return;
             }
@@ -1421,10 +1505,19 @@ static int main_event(struct IntuiMessage *m)
         if (code == SELECTDOWN && show_list && list && mx >= list->x && mx < list->x + list->w && my >= list->y && my < list->y + list->h) {
             r = ogt_list_event(list, cl, code, ia, mx, my, secs, micros, &idx);
             if (r == OGT_LIST_OPENED) show_item(idx, 1);
-        } else if (code == SELECTDOWN && mx >= seek_box.x && mx < seek_box.x + seek_box.w && my >= seek_box.y && my < seek_box.y + seek_box.h &&
-                   kind == K_PICTURE && nitems > 1) {
-            int n = (mx - seek_box.x) * nitems / seek_box.w;
-            show_item(n < nitems ? n : nitems - 1, playing);
+        } else if (code == SELECTDOWN && vol_box.w && mx >= vol_box.x && mx < vol_box.x + vol_box.w && my >= vol_box.y && my < vol_box.y + vol_box.h) {
+            set_volume((mx - vol_box.x) * 64 / (vol_box.w - 1));
+        } else if (code == SELECTDOWN && bar_box.w && mx >= bar_box.x && mx < bar_box.x + bar_box.w && my >= bar_box.y && my < bar_box.y + bar_box.h) {
+            int at = (mx - bar_box.x) * 1000 / bar_box.w;
+            if (kind == K_PICTURE && nitems > 1) {
+                int n = at * nitems / 1000;
+                show_item(n < nitems ? n : nitems - 1, playing);
+            } else if (kind == K_VIDEO && dto && frames > 1) {
+                /* seek: ADTA_Frame */
+                frame = at * (frames - 1) / 1000;
+                SetDTAttrs(dto, win, NULL, ADTA_Frame, (ULONG)frame, TAG_DONE);
+                draw_seek();
+            }
         }
         break;
     case IDCMP_IDCMPUPDATE:
@@ -1435,7 +1528,7 @@ static int main_event(struct IntuiMessage *m)
         i = ogt_toolbar_index(&tb, g->GadgetID);
         if (i >= 0 && !tb.tool[i].disabled) {
             tb.pressed = i;
-            ogt_toolbar_draw_one(&tb, &ctx, win->RPort, i, 1, "window");
+            draw_one(i, 1);
         }
         if (list) ogt_list_event(list, cl, code, ia, mx, my, secs, micros, &idx);
         break;
@@ -1445,7 +1538,7 @@ static int main_event(struct IntuiMessage *m)
         i = ogt_toolbar_index(&tb, g->GadgetID);
         if (i >= 0) {
             tb.pressed = -1;
-            ogt_toolbar_draw_one(&tb, &ctx, win->RPort, i, 0, "window");
+            draw_one(i, 0);
             if (!tb.tool[i].disabled) {
                 r = command(tb.tool[i].id);
                 if (win) draw_tools();
@@ -1491,6 +1584,8 @@ static int main_event(struct IntuiMessage *m)
         case 'a': case 'A': return command(C_ADD);
         case 'm': case 'M': case 127: return command(C_REMOVE);
         case 13: if (list && list->selected >= 0) show_item(list->selected, 1); break;
+        case '+': case '=': set_volume(volume + 8); break;
+        case '-': set_volume(volume - 8); break;
         }
         break;
     }
@@ -1521,7 +1616,7 @@ static void tooltypes(struct WBStartup *wb)
     if (!IconBase || !wb || wb->sm_NumArgs < 1) return;
     old = CurrentDir(wb->sm_ArgList[0].wa_Lock);
     if ((dob = GetDiskObject((CONST_STRPTR)wb->sm_ArgList[0].wa_Name))) {
-        if ((v = FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (CONST_STRPTR)"BUTTONS"))) bt_forced = ogt_buttons_parse((char *)v);
+        if ((v = FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (CONST_STRPTR)"BUTTONS"))) bt_forced = parse_buttons((char *)v);
         if (FindToolType((CONST_STRPTR *)dob->do_ToolTypes, (CONST_STRPTR)"OWNSCREEN")) want_own = 1;
         FreeDiskObject(dob);
     }
@@ -1548,7 +1643,7 @@ static int op_main(void)
             add_lock(_WBenchMsg->sm_ArgList[i].wa_Lock, (const char *)_WBenchMsg->sm_ArgList[i].wa_Name);
     } else if ((rda = ReadArgs((CONST_STRPTR)"FILES/M,BUTTONS/K,OWNSCREEN/S", args, NULL))) {
         if (args[0]) { char **f = (char **)args[0]; while (*f) add_path(*f++); }
-        if (args[1]) bt_forced = ogt_buttons_parse((const char *)args[1]);
+        if (args[1]) bt_forced = parse_buttons((const char *)args[1]);
         if (args[2]) want_own = 1;
     }
     appport = CreateMsgPort();

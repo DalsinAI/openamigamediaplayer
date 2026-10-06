@@ -14,8 +14,8 @@ datatype is a new format for it.
 | Kind | Group | What OpenPlay does |
 | --- | --- | --- |
 | Picture | GID_PICTURE | Shows it; Play is a slideshow, six seconds a picture |
-| Sound, tune, module | GID_SOUND, GID_MUSIC | Plays, pauses, stops (DTM_TRIGGER) |
-| Film, animation | GID_ANIMATION, GID_MOVIE | The same; the last frame moves on to the next item; Save CDXL |
+| Sound, tune, module | GID_SOUND, GID_MUSIC | Plays, pauses, stops (DTM_TRIGGER: STM_PLAY, STM_PAUSE, STM_STOP); volume (SDTA_Volume); Repeat (DTA_Repeat) |
+| Film, animation | GID_ANIMATION, GID_MOVIE | The same (ADTA_Volume); seeking by a click on the bar (ADTA_Frame); the last frame moves on to the next item unless Repeat is on; Save CDXL |
 | Text, document | GID_TEXT, GID_DOCUMENT | Shows it |
 
 ## 2. The window
@@ -50,9 +50,17 @@ first to last: `BUTTONS=` (Shell or ToolType), View › Buttons (kept in
 (`ogt_buttons_style()`). View › Buttons › As in Look prefs goes back to the
 last.
 
-The player icons (play, pause, stop, previous, next, repeat, full screen,
-playlist, info, convert, slideshow) are OpenGadTools' (`ogt_icons`), so
-every Open app shares them.
+The toolbar is OpenGadTools' (`ogt_toolbar`, from the library copied into
+`third_party/opengadtools`); OpenPlay draws the player icons (play, pause,
+stop, previous, next, repeat, full screen, playlist, info, convert,
+slideshow, sound, film) on its buttons from `app/op_icons.c`, and reads Look
+prefs' `buttons` line itself. Both move to OpenGadTools when it has player
+icons, the Buttons line and a themed slider, so every Open app shares them.
+
+The datatype object is a gadget in the window (AddDTObject, ICA_TARGET
+ICTARGET_IDCMP). Its IDCMPUPDATE messages are told from the playlist's
+scroller by GA_ID, and DTA_Sync refreshes it (RefreshDTObjects). Play is
+sent on the first DTA_Sync, once the object has laid itself out.
 
 ## 4. The look
 
@@ -64,7 +72,7 @@ the theme's list colour for sound.
 
 ## 5. What it remembers
 
-`ENVARC:OpenPlay/`: `Buttons`, `Playlist` (shown or not), `Repeat`,
+`ENVARC:OpenPlay/`: `Buttons`, `Playlist` (shown or not), `Repeat`, `Volume`,
 `OwnScreen` and `Window` (its place and size on Workbench).
 
 ## 6. Next
@@ -73,8 +81,8 @@ the theme's list colour for sound.
    at once and hangs on close; reported to the datatypes work).
 2. The compact window for tunes from the mock-ups: title, author, songs and
    a scope.
-3. A seek bar you can drag (ADTM_LOCATE for films, the sample position for
-   sound).
+3. A themed slider for position and volume, dragged as well as clicked,
+   when OpenGadTools has one.
 4. Help bubbles and underlined keys on the toolbar, when OpenGadTools has
    them.
 5. Thumbnails in the playlist, made by the same datatypes at small size.

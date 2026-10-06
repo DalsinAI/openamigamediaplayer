@@ -1,0 +1,3 @@
+OpenGadTools lib/, copied unchanged from https://github.com/DalsinAI/opengadtools
+at d5f4dff (main, 6 October 2026). MIT, Copyright (c) 2026 Dalsin Limited.
+OpenPlay draws its own player icons (app/op_icons.c) until OpenGadTools has them.
