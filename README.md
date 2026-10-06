@@ -57,3 +57,7 @@ I about this file, C save CDXL, A add, M remove, + and - volume.
 MIT, Copyright (c) 2026 Dalsin Limited (`LICENSE`). If you use or build on
 this work, we ask (we do not require) that you credit Dalsin Limited and
 AmigaChrome.
+
+## Contributors
+
+OpenPlay is created and maintained by [SacredTrees](https://github.com/SacredTrees) with the AmigaChrome agent team, copyright Dalsin Limited. Everyone whose work it includes is credited in [`CONTRIBUTORS.md`](CONTRIBUTORS.md).
