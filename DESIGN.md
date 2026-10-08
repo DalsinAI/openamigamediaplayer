@@ -38,7 +38,11 @@ datatype is a new format for it.
 - **The main action, Play, is in the accent**, and becomes Pause while
   playing (Slideshow for pictures).
 - **Toggles** (Repeat, Playlist) draw pressed while on.
-- **The status line** names the datatype and what decoded the file. Over a
+- **The status line** names the datatype and what decoded the file: what
+  the datatype says through openamigaimage's `OIA_DecodedBy` attribute
+  (openmodule.datatype: this Amiga's CPU, a cores board core or
+  media.decode/1), else the Nursery for openpicture, opensound, opendoc and
+  openvideo, else this Amiga. Info adds the datatype's `OIA_Stats`. Over a
   toolbar button it names the button and its key, since toolbar help bubbles
   aren't in OpenGadTools yet (DESIGN.md 2h, gap 4).
 

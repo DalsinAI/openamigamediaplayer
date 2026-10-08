@@ -844,17 +844,37 @@ static int ticks_since(const struct DateStamp *a)
     return (int)((b.ds_Days - a->ds_Days) * 24 * 60 * 60 * 50 + (b.ds_Minute - a->ds_Minute) * 60 * 50 + (b.ds_Tick - a->ds_Tick));
 }
 
-/* What did the work: our datatypes ask the Nursery (openservice.device:
- * the services card or a paired Cradle); the rest decode on this Amiga. */
+/* openamigaimage's own attributes (its Datatypes/include/datatypes/openimage.h):
+ * what decodes or plays an object, and how that has gone, in words. A
+ * datatype that doesn't know them answers OM_GET with FALSE. */
+#define OIA_DecodedBy (TAG_USER + 0x0DA15000 + 1)
+#define OIA_Stats     (TAG_USER + 0x0DA15000 + 2)
+
+/* openamigaimage's datatypes that send the file to the Nursery
+ * (openservice.device: the services card or a paired Cradle). */
+static const char *const nursery_datatypes[] = { "openpicture", "opensound", "opendoc", "openvideo", NULL };
+
+/* What did the work: what the datatype says (openmodule.datatype names the
+ * way it plays: this CPU, a cores board core or media.decode/1); else the
+ * Nursery for the datatypes above; else this Amiga (webp, webm, the
+ * system's own). */
 static const char *decoded_by(void)
 {
-    if (!strncmp(dt_base, "open", 4)) {
-        int found;
-        Forbid();
-        found = FindName(&SysBase->DeviceList, (CONST_STRPTR)"openservice.device") != NULL;
-        Permit();
-        return found ? "media.decode/1 through the Nursery" : "the Nursery (openservice.device)";
+    static char said[64];
+    STRPTR by = NULL;
+    int i;
+    if (dto && GetDTAttrs(dto, OIA_DecodedBy, (ULONG)&by, TAG_DONE) && by && *by) {
+        snprintf(said, sizeof said, "%s", (const char *)by);
+        return said;
     }
+    for (i = 0; nursery_datatypes[i]; i++)
+        if (!strcmp(dt_base, nursery_datatypes[i])) {
+            int found;
+            Forbid();
+            found = FindName(&SysBase->DeviceList, (CONST_STRPTR)"openservice.device") != NULL;
+            Permit();
+            return found ? "media.decode/1 through the Nursery" : "the Nursery (openservice.device)";
+        }
     return "this Amiga";
 }
 
@@ -1132,7 +1152,13 @@ static void info_window(void)
     else if (kind == K_VIDEO) snprintf(lines[3], 160, "%d frames, %d a second", frames, fps);
     else if (kind == K_SOUND) snprintf(lines[3], 160, "%lu samples at %lu Hz", (unsigned long)snd_len, (unsigned long)snd_rate);
     else snprintf(lines[3], 160, "-");
-    snprintf(lines[4], 160, "%s", decoded_by());
+    {
+        STRPTR how = NULL;
+        if (GetDTAttrs(dto, OIA_Stats, (ULONG)&how, TAG_DONE) && how && *how)
+            snprintf(lines[4], 160, "%s: %s", decoded_by(), (const char *)how);
+        else
+            snprintf(lines[4], 160, "%s", decoded_by());
+    }
     snprintf(lines[5], 160, "%s", on_amigachrome() ? "AmigaChrome" : "this Amiga");
     {
         ULONG depth = GetBitMapAttr(win->WScreen->RastPort.BitMap, BMA_DEPTH);
