@@ -11,7 +11,7 @@ OGT="$HERE/third_party/opengadtools"
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
 OUT=${1:-$HERE/build/os3}
 mkdir -p "$OUT"
-FLAGS="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-common -I$HERE/app -I$OGT"
+FLAGS="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common -I$HERE/app -I$OGT"
 # shellcheck disable=SC2086
 "$CC" $FLAGS -o "$OUT/OpenPlay" \
     "$HERE/app/openplay.c" "$HERE/app/op_icons.c" "$HERE/app/op_stack.c" \
