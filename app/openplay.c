@@ -1142,7 +1142,7 @@ static void info_window(void)
     struct Gadget *ig = NULL, *gg;
     struct NewGadget ng;
     char lines[8][160], all[1400] = "";
-    const char *labels[8] = { "File", "Datatype", "Kind", "Size", "Decoded by", "Host", "Screen", "Opened in" };
+    const char *labels[8] = { "File", "Datatype", "Kind", "Size", "Decoded by", "Runs on", "Screen", "Opened in" };
     int n = 8, i, lw = 0, vw = 0, done = 0, ww, wh, bh = fh + 8;
     if (!dto || cur < 0) return;
     snprintf(lines[0], 160, "%s", items[cur].path);
