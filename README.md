@@ -10,7 +10,8 @@ off the datatypes and the new opengadtools interface and open rtg".
 
 - **One window:** a toolbar, the picture or film, the position, a playlist
   and a status line that says which datatype opened the file and what decoded
-  it (this Amiga, or the Nursery: the services card or a paired Cradle).
+  it (this Amiga, a cores board core, or the Nursery: the services card or a
+  paired Cradle), as the datatype tells it where it can.
 - **Buttons as icons and text, icons, or text,** from OpenPrefs Look, View ›
   Buttons, or a `BUTTONS=` ToolType (Open Apps Look and Feel).
 - **Pictures play as a slideshow;** sounds and films play, pause and stop
