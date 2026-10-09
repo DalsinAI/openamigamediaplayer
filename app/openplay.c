@@ -337,7 +337,7 @@ static int load_theme_file(const char *name)
  * ENV:OpenGadTools/Theme (OpenGadTools 0.1); else Open, light. */
 static void load_look(void)
 {
-    char *text = load_text("ENV:OpenGadTools/Look"), *line, *p, w[112], v[112], name[80] = "";
+    char *text = load_text("ENV:OpenGadTools/Look"), *line, *p, w[112], v[112], name[160] = "";   /* name: a whole w[] or Theme buf[] */
     int mode = OGT_LIGHT, from = 19, to = 7, lite_mode = 2, has_accent = 0;
     unsigned lite = OGT_LITE_SHADOWS | OGT_LITE_ROUNDING | OGT_LITE_GRADIENTS;
     ogt_rgb accent = {0, 0, 0};
@@ -577,7 +577,7 @@ static void draw_status(void)
 
 static void set_status(const char *s)
 {
-    snprintf(status, sizeof status, "%s", s);
+    strlcpy(status, s, sizeof status);         /* one line: a longer message is cut to it */
     draw_status();
 }
 
@@ -586,7 +586,7 @@ static void set_status(const char *s)
 static void draw_seek(void)
 {
     struct RastPort *rp;
-    char a[16] = "", b[16] = "";
+    char a[32] = "", b[32] = "";                /* "%d of %d" with any two ints */
     int x, w, bx, bw, filled = 0;
     if (!win) return;
     rp = win->RPort;
@@ -892,7 +892,7 @@ static void show_item(int i, int play)
 {
     struct DataType *dtn = NULL;
     int t;
-    char msg[PATH_LEN + 80];
+    char msg[PATH_LEN + 176];                   /* "Couldn't open ", a name, why[80] and the hint */
     if (i < 0 || i >= nitems) return;
     close_media();
     cur = i;
@@ -1021,10 +1021,10 @@ static void stop(void)
 static int ask_file(const char *title, int save, int multi, char *out, int size, struct FileRequester **keep)
 {
     struct FileRequester *fr;
-    char def[64] = "";
+    char def[108] = "";                         /* a whole file name, as the requester's default */
     if (!AslBase) return 0;
     if (save && cur >= 0) {
-        snprintf(def, sizeof def, "%s", base_name(items[cur].path));
+        strlcpy(def, base_name(items[cur].path), sizeof def);
         if (strrchr(def, '.')) *strrchr(def, '.') = 0;
         strncat(def, out[0] ? out : "", sizeof def - strlen(def) - 1);
     }
@@ -1141,31 +1141,34 @@ static void info_window(void)
     struct Window *iw;
     struct Gadget *ig = NULL, *gg;
     struct NewGadget ng;
-    char lines[8][160], all[1400] = "";
+    /* static: the File line holds a whole path, and all of them are too much
+       for a program's stack */
+    static char lines[8][PATH_LEN + 16], all[8 * (PATH_LEN + 32)];
     const char *labels[8] = { "File", "Datatype", "Kind", "Size", "Decoded by", "Runs on", "Screen", "Opened in" };
     int n = 8, i, lw = 0, vw = 0, done = 0, ww, wh, bh = fh + 8;
     if (!dto || cur < 0) return;
-    snprintf(lines[0], 160, "%s", items[cur].path);
-    snprintf(lines[1], 160, "%s.datatype (%s)", dt_base, dt_name);
-    snprintf(lines[2], 160, "%s", kind_word[kind]);
-    if (kind == K_PICTURE) snprintf(lines[3], 160, "%lu x %lu", (unsigned long)pic_w, (unsigned long)pic_h);
-    else if (kind == K_VIDEO) snprintf(lines[3], 160, "%d frames, %d a second", frames, fps);
-    else if (kind == K_SOUND) snprintf(lines[3], 160, "%lu samples at %lu Hz", (unsigned long)snd_len, (unsigned long)snd_rate);
-    else snprintf(lines[3], 160, "-");
+    all[0] = 0;
+    snprintf(lines[0], sizeof lines[0], "%s", items[cur].path);
+    snprintf(lines[1], sizeof lines[0], "%s.datatype (%s)", dt_base, dt_name);
+    snprintf(lines[2], sizeof lines[0], "%s", kind_word[kind]);
+    if (kind == K_PICTURE) snprintf(lines[3], sizeof lines[0], "%lu x %lu", (unsigned long)pic_w, (unsigned long)pic_h);
+    else if (kind == K_VIDEO) snprintf(lines[3], sizeof lines[0], "%d frames, %d a second", frames, fps);
+    else if (kind == K_SOUND) snprintf(lines[3], sizeof lines[0], "%lu samples at %lu Hz", (unsigned long)snd_len, (unsigned long)snd_rate);
+    else snprintf(lines[3], sizeof lines[0], "-");
     {
         STRPTR how = NULL;
         if (GetDTAttrs(dto, OIA_Stats, (ULONG)&how, TAG_DONE) && how && *how)
-            snprintf(lines[4], 160, "%s: %s", decoded_by(), (const char *)how);
+            snprintf(lines[4], sizeof lines[0], "%s: %s", decoded_by(), (const char *)how);
         else
-            snprintf(lines[4], 160, "%s", decoded_by());
+            snprintf(lines[4], sizeof lines[0], "%s", decoded_by());
     }
-    snprintf(lines[5], 160, "%s", on_amigachrome() ? "AmigaChrome" : "this Amiga");
+    snprintf(lines[5], sizeof lines[0], "%s", on_amigachrome() ? "AmigaChrome" : "this Amiga");
     {
         ULONG depth = GetBitMapAttr(win->WScreen->RastPort.BitMap, BMA_DEPTH);
-        snprintf(lines[6], 160, "%dx%d, %lu-bit%s", win->WScreen->Width, win->WScreen->Height, (unsigned long)depth,
+        snprintf(lines[6], sizeof lines[0], "%dx%d, %lu-bit%s", win->WScreen->Width, win->WScreen->Height, (unsigned long)depth,
                  own_scr ? ", OpenPlay's own screen" : "");
     }
-    snprintf(lines[7], 160, "%s", opened_in);
+    snprintf(lines[7], sizeof lines[0], "%s", opened_in);
     for (i = 0; i < n; i++) {
         int a = ogt_text_width(win->RPort, labels[i]), b = ogt_text_width(win->RPort, lines[i]);
         if (a > lw) lw = a;
