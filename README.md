@@ -12,8 +12,9 @@ off the datatypes and the new opengadtools interface and open rtg".
   and a status line that says which datatype opened the file and what decoded
   it (this Amiga, a cores board core, or the Nursery: the services card or a
   paired Cradle), as the datatype tells it where it can.
-- **Buttons as icons and text, icons, or text,** from OpenPrefs Look, View ›
-  Buttons, or a `BUTTONS=` ToolType (Open Apps Look and Feel).
+- **Buttons as icons (the default), icons and text, or text,** from
+  OpenPrefs Look, View › Buttons, or a `BUTTONS=` ToolType (Open Apps Look
+  and Feel).
 - **Pictures play as a slideshow;** sounds and films play, pause and stop
   (DTM_TRIGGER), with a volume bar (SDTA_Volume), seeking in films
   (ADTA_Frame) and Repeat (DTA_Repeat).

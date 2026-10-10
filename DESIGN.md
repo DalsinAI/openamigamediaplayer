@@ -48,8 +48,10 @@ datatype is a new format for it.
 
 ## 3. Buttons
 
-Icons and text, icons, or text, as in every Open app. The style comes from,
-first to last: `BUTTONS=` (Shell or ToolType), View › Buttons (kept in
+Icons, icons and text, or text, as in every Open app; icons only when
+nothing says otherwise (every Open app starts with icons, not icons and
+text: the Team's rule of 10 October 2026). The style comes from, first to
+last: `BUTTONS=` (Shell or ToolType), View › Buttons (kept in
 `ENVARC:OpenPlay/Buttons`), then Look prefs' `buttons` line
 (`ogt_buttons_style()`). View › Buttons › As in Look prefs goes back to the
 last.

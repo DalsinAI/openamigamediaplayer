@@ -2,8 +2,9 @@
  * opens: pictures (a slideshow), sounds and tunes, animations and video,
  * through datatypes.library, so a new datatype is a new format for free.
  * Drawn with OpenGadTools in the OpenLook theme, by the rules of Open Apps
- * Look and Feel: the buttons as icons and text, icons, or text; every action
- * a menu item too; Workbench by default, its own screen when asked.
+ * Look and Feel: the buttons as icons (the default), icons and text, or
+ * text; every action a menu item too; Workbench by default, its own screen
+ * when asked.
  *
  *   [Open] | [Previous] [Play] [Stop] [Next] | [Repeat] [Full screen]   [Playlist] [Info] [Save CDXL]
  *   +--------------------------------------------+  Playlist   6 items
@@ -65,7 +66,7 @@
 #include "op_stack.h"
 #include "op_icons.h"
 
-#define VERSION_TEXT "OpenPlay 0.1 (6.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.1 (10.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -409,11 +410,12 @@ static int parse_buttons(const char *s)
 }
 
 /* Look prefs' proposed "buttons" line (Open Apps Look and Feel), read here
- * until OpenGadTools reads it for every app. */
+ * until OpenGadTools reads it for every app; icons only when it says nothing
+ * (every Open app starts with icons, the Team's rule of 10 October 2026). */
 static int look_buttons(void)
 {
     char *text = load_text("ENV:OpenGadTools/Look"), *l;
-    int style = OGT_TB_ICONS_TEXT;
+    int style = OGT_TB_ICONS;
     for (l = text; l && *l; l = strchr(l, '\n') ? strchr(l, '\n') + 1 : NULL)
         if (!strncmp(l, "buttons", 7) && (l[7] == ' ' || l[7] == '\t')) {
             int b = parse_buttons(l + 7);
