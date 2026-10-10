@@ -68,7 +68,7 @@
 #include "op_stack.h"
 #include "op_icons.h"
 
-#define VERSION_TEXT "OpenPlay 0.1.2 (10.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.3 (10.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -1247,13 +1247,16 @@ static void info_window(void)
 /* ---- full screen ---- */
 
 /* The film or picture alone on a screen of its own, Workbench's mode;
- * Esc, a click or F goes back. OpenRTG scales it on the board. */
+ * Esc, a click or F goes back. OpenRTG scales it on the board.
+ *
+ * 0.1.3: the window's own datatype object moves to the full-screen window and back, rather than a
+ * second object of the same file beside it (two decoders of one film: the user, 10 October 2026,
+ * "does not return from full screen and crashes"). The object is stopped before it moves, both ways. */
 static void full_screen(void)
 {
     struct Screen *fs;
     struct Window *fw;
-    Object *o;
-    int done = 0;
+    int done = 0, was_playing = playing && kind == K_VIDEO;
     ULONG fpen;
     if (!dto || cur < 0 || kind == K_SOUND) return;
     if (!(fs = OpenScreenTags(NULL, SA_LikeWorkbench, TRUE, SA_Title, (ULONG)"OpenPlay", SA_ShowTitle, FALSE,
@@ -1270,15 +1273,13 @@ static void full_screen(void)
     fpen = ObtainBestPen(fs->ViewPort.ColorMap, 0, 0, 0, OBP_Precision, PRECISION_EXACT, TAG_DONE);
     SetAPen(fw->RPort, fpen);
     RectFill(fw->RPort, 0, 0, fs->Width - 1, fs->Height - 1);
-    if (playing && kind != K_PICTURE) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL);
-    o = NewDTObject((APTR)items[cur].path, GA_Left, 0, GA_Top, 0, GA_Width, fs->Width, GA_Height, fs->Height,
-                    GA_ID, 1, ICA_TARGET, ICTARGET_IDCMP, PDTA_Remap, TRUE, PDTA_DestMode, PMODE_V43,
-                    DTA_ControlPanel, FALSE, TAG_DONE);
-    if (o) {
-        AddDTObject(fw, NULL, o, -1);
-        RefreshDTObjects(o, fw, NULL, TAG_DONE);
-        if (kind == K_VIDEO) DoDTMethod(o, fw, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
-    }
+    /* the object out of the window, sized to the screen, into the full-screen window */
+    if (kind == K_VIDEO) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
+    RemoveDTObject(win, dto);
+    SetAttrs(dto, GA_Left, 0, GA_Top, 0, GA_Width, fs->Width, GA_Height, fs->Height, TAG_DONE);
+    AddDTObject(fw, NULL, dto, -1);
+    RefreshDTObjects(dto, fw, NULL, TAG_DONE);
+    if (kind == K_VIDEO) DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
     while (!done) {
         struct IntuiMessage *m;
         WaitPort(fw->UserPort);
@@ -1286,23 +1287,30 @@ static void full_screen(void)
             ULONG cl = m->Class;
             UWORD code = m->Code;
             struct TagItem *tags = cl == IDCMP_IDCMPUPDATE ? (struct TagItem *)m->IAddress : NULL;
-            if (tags && o && FindTagItem(DTA_Sync, tags)) RefreshDTObjects(o, fw, NULL, TAG_DONE);
+            int sync = tags && FindTagItem(DTA_Sync, tags) != NULL;
             ReplyMsg((struct Message *)m);
+            if (sync) RefreshDTObjects(dto, fw, NULL, TAG_DONE);
             if (cl == IDCMP_MOUSEBUTTONS && code == SELECTDOWN) done = 1;
             else if (cl == IDCMP_VANILLAKEY && (code == 27 || code == 'f' || code == 'F')) done = 1;
-            else if (cl == IDCMP_VANILLAKEY && code == ' ' && o && kind == K_VIDEO)
-                DoDTMethod(o, fw, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL);
+            else if (cl == IDCMP_RAWKEY && code == 0x45) done = 1;                    /* Esc as a raw key too */
+            else if (cl == IDCMP_VANILLAKEY && code == ' ' && kind == K_VIDEO)
+                DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL);
         }
     }
-    if (o) {
-        DoDTMethod(o, fw, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
-        RemoveDTObject(fw, o);
-        DisposeDTObject(o);
+    /* back: stopped, out of the full-screen window, into ours at its place, then the screen goes */
+    if (kind == K_VIDEO) DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
+    RemoveDTObject(fw, dto);
+    {   /* any message the object sent to the full-screen window before it was removed */
+        struct IntuiMessage *m;
+        while ((m = (struct IntuiMessage *)GetMsg(fw->UserPort))) ReplyMsg((struct Message *)m);
     }
     ReleasePen(fs->ViewPort.ColorMap, fpen);
     CloseWindow(fw);
     CloseScreen(fs);
+    place_dto();
+    RefreshDTObjects(dto, win, NULL, TAG_DONE);
     playing = 0;
+    (void)was_playing;
     draw_tools();
 }
 
