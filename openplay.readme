@@ -22,6 +22,12 @@ AGA Amiga, Save CDXL turns a film into a CDXL the chipset plays by itself.
 
 Requires AmigaOS 3.2 and a 68020 or better.
 
+New in 0.1.1 (10 October 2026): the window first opens at 800 x 600, in
+the middle of the space beside OpenDock (or all of that space on a smaller
+screen), and the buttons start as icons only, as in every Open app. A size
+you give the window is kept. View > Buttons still chooses icons and text,
+or text.
+
 Licence: MIT, Copyright (c) 2026 Dalsin Limited. If you build on it, we ask
 that you credit Dalsin Limited and AmigaChrome.
 
