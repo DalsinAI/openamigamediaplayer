@@ -34,6 +34,12 @@ datatype is a new format for it.
   opens a public screen like Workbench's for OpenPlay alone. Full screen is
   always a screen of its own, with the film or picture alone; Esc, F or a
   click goes back.
+- **First size:** 800 x 600, centred in the screen's free area (below the
+  title bar and beside OpenDock), and never larger than that area, so on a
+  screen smaller than 800 x 600 it is the whole free area (the rule for every
+  Open app, 10 October 2026, as in OpenFiles 0.2.3). After that, the place
+  and size the user gives it are kept (`ENVARC:OpenPlay/Window`, section 5;
+  OpenWindows remembers it too). On its own screen it fills the screen.
 - **Title:** `OpenPlay · <file>`.
 - **The main action, Play, is in the accent**, and becomes Pause while
   playing (Slideshow for pictures).
@@ -48,8 +54,10 @@ datatype is a new format for it.
 
 ## 3. Buttons
 
-Icons and text, icons, or text, as in every Open app. The style comes from,
-first to last: `BUTTONS=` (Shell or ToolType), View › Buttons (kept in
+Icons, icons and text, or text, as in every Open app; icons only when
+nothing says otherwise (every Open app starts with icons, not icons and
+text: the Team's rule of 10 October 2026). The style comes from, first to
+last: `BUTTONS=` (Shell or ToolType), View › Buttons (kept in
 `ENVARC:OpenPlay/Buttons`), then Look prefs' `buttons` line
 (`ogt_buttons_style()`). View › Buttons › As in Look prefs goes back to the
 last.
