@@ -58,6 +58,7 @@
 #include <string.h>
 
 #include "ogt_theme.h"
+#include "lastdir.h"
 #include "ogt_draw.h"
 #include "ogt_font.h"
 #include "ogt_icons.h"
@@ -67,7 +68,7 @@
 #include "op_stack.h"
 #include "op_icons.h"
 
-#define VERSION_TEXT "OpenPlay 0.1.1 (10.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.2 (10.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -1025,7 +1026,9 @@ static int ask_file(const char *title, int save, int multi, char *out, int size,
 {
     struct FileRequester *fr;
     char def[108] = "";                         /* a whole file name, as the requester's default */
+    static char last[512];
     if (!AslBase) return 0;
+    lastdir_get("OpenPlay", last, sizeof last);  /* 0.1.2: where the last media came from */
     if (save && cur >= 0) {
         strlcpy(def, base_name(items[cur].path), sizeof def);
         if (strrchr(def, '.')) *strrchr(def, '.') = 0;
@@ -1033,10 +1036,11 @@ static int ask_file(const char *title, int save, int multi, char *out, int size,
     }
     if (!(fr = AllocAslRequestTags(ASL_FileRequest, ASLFR_Window, (ULONG)win, ASLFR_TitleText, (ULONG)title,
                                    ASLFR_DoSaveMode, save, ASLFR_DoMultiSelect, multi, ASLFR_InitialFile, (ULONG)def,
-                                   ASLFR_RejectIcons, TRUE, TAG_DONE)))
+                                   ASLFR_RejectIcons, TRUE, ASLFR_InitialDrawer, (ULONG)last, TAG_DONE)))
         return 0;
     if (!AslRequest(fr, NULL)) { FreeAslRequest(fr); return 0; }
     snprintf(out, size, "%s", fr->fr_Drawer);
+    lastdir_put("OpenPlay", (const char *)fr->fr_Drawer);
     AddPart((STRPTR)out, fr->fr_File, size);
     if (keep) *keep = fr; else FreeAslRequest(fr);
     return 1;
