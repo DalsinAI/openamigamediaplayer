@@ -69,7 +69,7 @@
 #include "op_stack.h"
 #include "op_icons.h"
 
-#define VERSION_TEXT "OpenPlay 0.1.3 (10.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.4 (12.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -96,7 +96,7 @@ static const char fallback_theme[] =
 
 enum { C_OPEN = 1, C_PREV, C_PLAY, C_STOP, C_NEXT, C_REPEAT, C_FULL, C_LIST, C_INFO, C_CDXL,
        C_ADD, C_REMOVE, C_SAVELIST, C_CLEAR, C_ABOUT, C_QUIT, C_OWNSCREEN,
-       C_BT_LOOK, C_BT_BOTH, C_BT_ICONS, C_BT_TEXT };
+       C_BT_LOOK, C_BT_BOTH, C_BT_ICONS, C_BT_TEXT, C_FIT, C_ONE, C_FILL };
 
 /* The toolbar draws the buttons and their names; OpenPlay draws the
  * player icons on them (op_icons) until OpenGadTools has its own. */
@@ -142,6 +142,10 @@ static struct NewMenu newmenus[] = {
     { NM_ITEM, (STRPTR)"Playlist", (STRPTR)"L", CHECKIT | MENUTOGGLE, 0, (APTR)C_LIST },
     { NM_ITEM, (STRPTR)"Full screen", (STRPTR)"F", 0, 0, (APTR)C_FULL },
     { NM_ITEM, (STRPTR)"Own screen", 0, CHECKIT | MENUTOGGLE, 0, (APTR)C_OWNSCREEN },
+    { NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
+    { NM_ITEM, (STRPTR)"Fit to window", (STRPTR)"Z", CHECKIT, (1 << 5) | (1 << 6), (APTR)C_FIT },
+    { NM_ITEM, (STRPTR)"Actual size", 0, CHECKIT, (1 << 4) | (1 << 6), (APTR)C_ONE },
+    { NM_ITEM, (STRPTR)"Fill window", 0, CHECKIT, (1 << 4) | (1 << 5), (APTR)C_FILL },
     { NM_ITEM, (STRPTR)"About this file...", (STRPTR)"I", 0, 0, (APTR)C_INFO },
     { NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     { NM_ITEM, (STRPTR)"Buttons", 0, 0, 0, 0 },
@@ -187,6 +191,12 @@ static struct AppWindow *appwin;
 static int bt_choice = -1;          /* -1 as in Look prefs, else OGT_TB_* */
 static int bt_forced = -1;          /* a ToolType or BUTTONS= */
 static int show_list = 1, repeat_on, want_own, volume = 64;
+/* How a picture is shown (0.1.4, the user, 12 October 2026: "should fit by default"): scaled to fit
+ * the window with its shape kept; at its own size; or scaled to fill the window, its edges cut. */
+enum { VIEW_FIT, VIEW_ONE, VIEW_FILL };
+static int view_mode = VIEW_FIT;
+static const char *const view_word[] = { "fit", "actual size", "fill" };
+static ULONG scaled_w, scaled_h;        /* the size PDTM_SCALE last gave the picture (0: not scaled) */
 static int win_box[4];              /* the place last remembered */
 
 static struct { int x, y, w, h; } media_box, seek_box, status_box, side_box, head_box, bar_box, vol_box;
@@ -462,6 +472,8 @@ static void load_prefs(void)
     if (read_small("ENV:" PREFS_DIR "/Repeat", buf, sizeof buf)) repeat_on = buf[0] == '1';
     if (read_small("ENV:" PREFS_DIR "/OwnScreen", buf, sizeof buf)) want_own = buf[0] == '1';
     if (read_small("ENV:" PREFS_DIR "/Volume", buf, sizeof buf)) { volume = atoi(buf); if (volume < 0 || volume > 64) volume = 64; }
+    if (read_small("ENV:" PREFS_DIR "/View", buf, sizeof buf))
+        view_mode = !strncmp(buf, "1:1", 3) ? VIEW_ONE : !strncmp(buf, "fill", 4) ? VIEW_FILL : VIEW_FIT;
     if (read_small("ENV:" PREFS_DIR "/Window", buf, sizeof buf)) {
         int i;
         p = buf;
@@ -479,6 +491,7 @@ static void save_prefs(void)
     write_small("OwnScreen", want_own ? "1\n" : "0\n");
     snprintf(buf, sizeof buf, "%d\n", volume);
     write_small("Volume", buf);
+    write_small("View", view_mode == VIEW_ONE ? "1:1\n" : view_mode == VIEW_FILL ? "fill\n" : "fit\n");
     if (win && !own_scr) {
         snprintf(buf, sizeof buf, "%d %d %d %d\n", win->LeftEdge, win->TopEdge, win->Width, win->Height);
         write_small("Window", buf);
@@ -692,7 +705,11 @@ static void draw_media_back(void)
     struct RastPort *rp = win->RPort;
     ogt_rgb black = {0, 0, 0};
     ogt_frame(rp, pen("string.shadow"), media_box.x - 1, media_box.y - 1, media_box.w + 2, media_box.h + 2);
-    if (dto) return;
+    if (dto) {
+        /* a picture smaller than the box sits in its middle on black */
+        if (kind == K_PICTURE) { ogt_rgb black0 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black0), media_box.x, media_box.y, media_box.w, media_box.h); }
+        return;
+    }
     ogt_box(rp, kind == K_SOUND ? pen("list") : ogt_pen_rgb(&ctx, black), media_box.x, media_box.y, media_box.w, media_box.h);
     {
         const char *hint = nitems ? "Choose Play, or double-click an item in the playlist." :
@@ -815,10 +832,45 @@ static void remove_gadgets(void)
     g_add = g_remove = g_save = NULL;
 }
 
+/* A picture's place in a box of BW x BH at BX, BY, as MODE says: scaled with
+ * picture.datatype's PDTM_SCALE (V45) when its size changes, in the middle
+ * when it is smaller than the box, and shown from its middle when it is
+ * bigger (fill, or a big picture at its own size). Anything else fills the box. */
+static void size_dto(int bx, int by, int bw, int bh, int mode)
+{
+    LONG l = bx, t = by, w = bw, h = bh;
+    if (kind == K_PICTURE && pic_w && pic_h && bw > 0 && bh > 0) {
+        ULONG tw = pic_w, th = pic_h;
+        if (mode != VIEW_ONE) {
+            unsigned long long rw = ((unsigned long long)bw << 16) / pic_w, rh = ((unsigned long long)bh << 16) / pic_h;
+            unsigned long long r = mode == VIEW_FIT ? (rw < rh ? rw : rh) : (rw > rh ? rw : rh);
+            tw = (ULONG)(((unsigned long long)pic_w * r) >> 16);
+            th = (ULONG)(((unsigned long long)pic_h * r) >> 16);
+            if (tw < 1) tw = 1;
+            if (th < 1) th = 1;
+        }
+        if (tw != (scaled_w ? scaled_w : pic_w) || th != (scaled_h ? scaled_h : pic_h)) {
+            ULONG done = DoDTMethod(dto, NULL, NULL, PDTM_SCALE, tw, th, 0);
+            dbg("PDTM_SCALE %lu x %lu: %lu", (unsigned long)tw, (unsigned long)th, (unsigned long)done);
+            if (!done) { tw = pic_w; th = pic_h; }      /* not scaled (picture.datatype may not enlarge): its own size */
+            scaled_w = tw;
+            scaled_h = th;
+        } else if (scaled_w) {
+            tw = scaled_w;
+            th = scaled_h;
+        }
+        if ((LONG)tw <= w) { l += (w - (LONG)tw) / 2; w = (LONG)tw; }
+        if ((LONG)th <= h) { t += (h - (LONG)th) / 2; h = (LONG)th; }
+        SetAttrs(dto, DTA_TopHoriz, (LONG)tw > bw ? ((LONG)tw - bw) / 2 : 0,
+                 DTA_TopVert, (LONG)th > bh ? ((LONG)th - bh) / 2 : 0, TAG_DONE);
+    }
+    SetAttrs(dto, GA_Left, l, GA_Top, t, GA_Width, w, GA_Height, h, TAG_DONE);
+}
+
 static void place_dto(void)
 {
     if (!dto) return;
-    SetAttrs(dto, GA_Left, media_box.x, GA_Top, media_box.y, GA_Width, media_box.w, GA_Height, media_box.h, TAG_DONE);
+    size_dto(media_box.x, media_box.y, media_box.w, media_box.h, view_mode);
     AddDTObject(win, NULL, dto, -1);
 }
 
@@ -906,6 +958,7 @@ static void close_media(void)
     playing = pending_play = 0;
     frames = frame = fps = 0;
     pic_w = pic_h = snd_len = snd_rate = 0;
+    scaled_w = scaled_h = 0;
     dt_name[0] = dt_base[0] = 0;
 }
 
@@ -946,7 +999,10 @@ static const char *decoded_by(void)
 static void describe(void)
 {
     char what[80] = "";
-    if (kind == K_PICTURE && pic_w) snprintf(what, sizeof what, "%lu x %lu", (unsigned long)pic_w, (unsigned long)pic_h);
+    if (kind == K_PICTURE && pic_w && scaled_w && (scaled_w != pic_w || scaled_h != pic_h))
+        snprintf(what, sizeof what, "%lu x %lu, shown at %lu x %lu (%s)", (unsigned long)pic_w, (unsigned long)pic_h,
+                 (unsigned long)scaled_w, (unsigned long)scaled_h, view_word[view_mode]);
+    else if (kind == K_PICTURE && pic_w) snprintf(what, sizeof what, "%lu x %lu", (unsigned long)pic_w, (unsigned long)pic_h);
     else if (kind == K_VIDEO && frames) snprintf(what, sizeof what, "%d frames, %d a second", frames, fps);
     else if (kind == K_SOUND && snd_rate) snprintf(what, sizeof what, "%lu Hz", (unsigned long)snd_rate);
     snprintf(status, sizeof status, "%s.datatype%s%s  -  %s  -  decoded by %s  -  opened in %s",
@@ -1019,11 +1075,11 @@ static void show_item(int i, int play)
             rate = period ? 3546895UL / period : 0;
         snd_len = len; snd_rate = rate;
     }
-    describe();
     dbg("opened kind %d base %s", kind, dt_base);
     if (kind == K_SOUND || kind == K_VIDEO)
         SetAttrs(dto, SDTA_Volume, (ULONG)volume, DTA_Repeat, (ULONG)repeat_on, TAG_DONE);
-    AddDTObject(win, NULL, dto, -1);
+    place_dto();
+    describe();
     dbg("added");
     draw_all();
     dbg("drawn");
@@ -1339,7 +1395,7 @@ static void full_screen(void)
     film_settle();
     if (kind == K_VIDEO) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     RemoveDTObject(win, dto);
-    SetAttrs(dto, GA_Left, 0, GA_Top, 0, GA_Width, fs->Width, GA_Height, fs->Height, TAG_DONE);
+    size_dto(0, 0, fs->Width, fs->Height, VIEW_FIT);
     AddDTObject(fw, NULL, dto, -1);
     RefreshDTObjects(dto, fw, NULL, TAG_DONE);
     if (kind == K_VIDEO) film_play(fw);
@@ -1414,6 +1470,8 @@ static void set_menu_checks(void)
             if (id == C_LIST) it->Flags = show_list ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             if (id == C_REPEAT) it->Flags = repeat_on ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             if (id == C_OWNSCREEN) it->Flags = own_scr ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
+            if (id == C_FIT || id == C_ONE || id == C_FILL)
+                it->Flags = (id - C_FIT) == view_mode ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             for (sub = it->SubItem; sub; sub = sub->NextItem) {
                 int sid = (int)(ULONG)GTMENUITEM_USERDATA(sub);
                 int on = (sid == C_BT_LOOK && bt_choice < 0) || (sid == C_BT_BOTH && bt_choice == OGT_TB_ICONS_TEXT) ||
@@ -1589,6 +1647,12 @@ static int command(int c)
     case C_BT_BOTH: bt_choice = OGT_TB_ICONS_TEXT; set_menu_checks(); relayout_and_draw(); break;
     case C_BT_ICONS: bt_choice = OGT_TB_ICONS; set_menu_checks(); relayout_and_draw(); break;
     case C_BT_TEXT: bt_choice = OGT_TB_TEXT; set_menu_checks(); relayout_and_draw(); break;
+    case C_FIT: case C_ONE: case C_FILL:
+        view_mode = c - C_FIT;
+        set_menu_checks();
+        relayout_and_draw();
+        if (dto) { describe(); draw_status(); }
+        break;
     }
     return 0;
 }
@@ -1776,6 +1840,7 @@ static int main_event(struct IntuiMessage *m)
         case 'n': case 'N': return command(C_NEXT);
         case 'r': case 'R': return command(C_REPEAT);
         case 'f': case 'F': return command(C_FULL);
+        case 'z': case 'Z': return command(C_FIT + (view_mode + 1) % 3);
         case 'l': case 'L': return command(C_LIST);
         case 'i': case 'I': return command(C_INFO);
         case 'c': case 'C': return command(C_CDXL);
