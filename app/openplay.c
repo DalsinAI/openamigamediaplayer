@@ -755,11 +755,58 @@ static void draw_all(void)
     if (dto) RefreshDTObjects(dto, win, NULL, TAG_DONE);
 }
 
+/* ---- a film starting ---- */
+
+static int ticks_since(const struct DateStamp *a)
+{
+    struct DateStamp b;
+    DateStamp(&b);
+    return (int)((b.ds_Days - a->ds_Days) * 24 * 60 * 60 * 50 + (b.ds_Minute - a->ds_Minute) * 60 * 50 + (b.ds_Tick - a->ds_Tick));
+}
+
+/* animation.datatype 47.11 (OS 3.2) never comes back from RemoveDTObject()
+ * when a film leaves its window in the moment after DTM_TRIGGER STM_PLAY,
+ * before its Display process has started playing: the program waits for
+ * that process and that process waits for good. Measured in the lab on
+ * 11 October 2026 with cdxl.datatype and openvideo.datatype: taken out at
+ * once after STM_PLAY it hung every time; a tenth of a second later or
+ * more, never. In OpenPlay that was Next or Previous pressed quickly, a
+ * key held down, a quick quit, a resize or Full screen and back just after
+ * a film began: the window stopped answering. So STM_PLAY goes through
+ * film_play(), and every way the object leaves a window goes through
+ * film_settle() first, which waits out the rest of half a second. */
+#define FILM_SETTLE_TICKS 25
+static struct DateStamp t_play;
+static Object *play_dto;                    /* the object STM_PLAY last went to */
+
+static void film_play(struct Window *w)
+{
+    if (!dto) return;
+    DoDTMethod(dto, w, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
+    DateStamp(&t_play);
+    play_dto = kind == K_VIDEO ? dto : NULL;
+}
+
+static void film_settle(void)
+{
+    int t;
+    if (!dto || play_dto != dto) return;
+    t = ticks_since(&t_play);
+    if (t >= 0 && t < FILM_SETTLE_TICKS) {
+        dbg("settle %d", FILM_SETTLE_TICKS - t);
+        Delay(FILM_SETTLE_TICKS - t);
+    }
+    play_dto = NULL;                        /* started: it may leave at any time now */
+}
+
 /* ---- layout ---- */
 
 static void remove_gadgets(void)
 {
-    if (dto) RemoveDTObject(win, dto);
+    if (dto) {
+        film_settle();
+        RemoveDTObject(win, dto);
+    }
     if (glist) {
         RemoveGList(win, glist, -1);
         FreeGadgets(glist);
@@ -848,23 +895,18 @@ static void relayout_and_draw(void)
 static void close_media(void)
 {
     if (dto) {
+        film_settle();
         DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
         RemoveDTObject(win, dto);
         DisposeDTObject(dto);
         dto = NULL;
     }
+    play_dto = NULL;
     kind = K_UNKNOWN;
     playing = pending_play = 0;
     frames = frame = fps = 0;
     pic_w = pic_h = snd_len = snd_rate = 0;
     dt_name[0] = dt_base[0] = 0;
-}
-
-static int ticks_since(const struct DateStamp *a)
-{
-    struct DateStamp b;
-    DateStamp(&b);
-    return (int)((b.ds_Days - a->ds_Days) * 24 * 60 * 60 * 50 + (b.ds_Minute - a->ds_Minute) * 60 * 50 + (b.ds_Tick - a->ds_Tick));
 }
 
 /* openamigaimage's own attributes (its Datatypes/include/datatypes/openimage.h):
@@ -1021,7 +1063,8 @@ static void play_pause(void)
     }
     if (kind == K_SOUND || kind == K_VIDEO) {
         if (pending_play) pending_play = 0;
-        else DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, playing ? STM_PAUSE : STM_PLAY, NULL);
+        else if (playing) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL);
+        else film_play(win);
         playing = !playing;
     } else if (kind == K_PICTURE) {
         playing = !playing;
@@ -1293,12 +1336,13 @@ static void full_screen(void)
     SetAPen(fw->RPort, fpen);
     RectFill(fw->RPort, 0, 0, fs->Width - 1, fs->Height - 1);
     /* the object out of the window, sized to the screen, into the full-screen window */
+    film_settle();
     if (kind == K_VIDEO) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     RemoveDTObject(win, dto);
     SetAttrs(dto, GA_Left, 0, GA_Top, 0, GA_Width, fs->Width, GA_Height, fs->Height, TAG_DONE);
     AddDTObject(fw, NULL, dto, -1);
     RefreshDTObjects(dto, fw, NULL, TAG_DONE);
-    if (kind == K_VIDEO) DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
+    if (kind == K_VIDEO) film_play(fw);
     while (!done) {
         struct IntuiMessage *m;
         WaitPort(fw->UserPort);
@@ -1317,6 +1361,7 @@ static void full_screen(void)
         }
     }
     /* back: stopped, out of the full-screen window, into ours at its place, then the screen goes */
+    film_settle();
     if (kind == K_VIDEO) DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     RemoveDTObject(fw, dto);
     {   /* any message the object sent to the full-screen window before it was removed */
@@ -1587,7 +1632,7 @@ static void dt_update(struct TagItem *tags)
             if (pending_play) {
                 pending_play = 0;
                 dbg("play on sync");
-                DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
+                film_play(win);
                 dbg("playing");
             }
             break;
@@ -1628,7 +1673,7 @@ static int main_event(struct IntuiMessage *m)
     case IDCMP_INTUITICKS:
         if (pending_play && dto && ++pending_ticks >= 10) {
             pending_play = 0;
-            DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
+            film_play(win);
         }
         /* animation.datatype 47 doesn't always say which frame it is on:
          * ask it, so the slider and the buttons follow the film */
