@@ -51,6 +51,7 @@
 #include <proto/wb.h>
 #include <proto/utility.h>
 #include <proto/expansion.h>
+#include <inline/macros.h>
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -307,12 +308,30 @@ static int on_amigachrome(void)
     return ac;
 }
 
-/* Lite by itself: a real 68040 or 68060 with no OpenGPU (OpenLook's rule). */
+/* Whether opengpu.library draws in hardware (opengadtools' ogt_gpu.h): an ARGB
+ * composite answered by a back end other than the CPU (back end 0). On a real
+ * Amiga only the CPU back end runs, since ACRTG.gpu needs AmigaChrome's board. */
+#define OP_OGPU_Query(base, op, fmt) \
+    LP2(0x1e, ULONG, OGPU_Query, ULONG, (op), d0, ULONG, (fmt), d1, , (base))
+static int gpu_in_hardware(void)
+{
+    struct Library *gpu = OpenLibrary((CONST_STRPTR)"opengpu.library", 0);
+    int hw = 0;
+    if (gpu) {
+        ULONG q = OP_OGPU_Query(gpu, 0x0020, 3);   /* OGPU_OP_COMPOSITE, OGPU_FMT_ARGB32 */
+        hw = (q & 0xFF) != 0 && ((q >> 8) & 0xFF) != 0;
+        CloseLibrary(gpu);
+    }
+    return hw;
+}
+
+/* Lite by itself: a real 68040 or 68060 whose drawing OpenGPU doesn't do in
+ * hardware (OpenLook's rule; 12 Oct 2026: it asked only whether the library
+ * opened, so OpenGPU on a real 68060 brought the shadows back on AGA). */
 static int lite_by_itself(void)
 {
-    struct Library *gpu;
     if (!(SysBase->AttnFlags & (AFF_68040 | AFF_68060))) return 0;
-    if ((gpu = OpenLibrary((CONST_STRPTR)"opengpu.library", 0))) { CloseLibrary(gpu); return 0; }
+    if (gpu_in_hardware()) return 0;
     return !on_amigachrome();
 }
 
