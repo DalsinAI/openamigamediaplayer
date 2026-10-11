@@ -1659,6 +1659,13 @@ static int main_event(struct IntuiMessage *m)
         if (copy) { dt_update(copy); FreeTagItems(copy); }
         return 0;
     }
+    if (cl == IDCMP_IDCMPUPDATE) {
+        /* the scroller's news: its tag list is Intuition's and may be freed
+         * once the message is replied, so it is read first */
+        if (list) ogt_list_event(list, cl, code, ia, mx, my, secs, micros, &idx);
+        GT_ReplyIMsg(m);
+        return 0;
+    }
     GT_ReplyIMsg(m);
     switch (cl) {
     case IDCMP_CLOSEWINDOW:
@@ -1713,9 +1720,6 @@ static int main_event(struct IntuiMessage *m)
                 draw_seek();
             }
         }
-        break;
-    case IDCMP_IDCMPUPDATE:
-        if (list) ogt_list_event(list, cl, code, ia, mx, my, secs, micros, &idx);
         break;
     case IDCMP_GADGETDOWN: {
         struct Gadget *g = ia;
