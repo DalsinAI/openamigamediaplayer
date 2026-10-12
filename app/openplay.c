@@ -29,12 +29,14 @@
 #include <libraries/asl.h>
 #include <libraries/iffparse.h>
 #include <graphics/text.h>
+#include <graphics/modeid.h>
 #include <datatypes/datatypes.h>
 #include <datatypes/datatypesclass.h>
 #include <datatypes/pictureclass.h>
 #include <datatypes/soundclass.h>
 #include <datatypes/animationclass.h>
 #include <devices/inputevent.h>
+#include <devices/timer.h>
 #include <workbench/startup.h>
 #include <workbench/workbench.h>
 #include <workbench/icon.h>
@@ -68,8 +70,9 @@
 
 #include "op_stack.h"
 #include "op_icons.h"
+#include "op_rtg.h"
 
-#define VERSION_TEXT "OpenPlay 0.1.5 (12.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.6 (12.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -226,6 +229,22 @@ static int tb_y;
 /* ---- what is playing ---- */
 
 static Object *dto;
+static struct Window *dto_in;               /* the window the object is in (NULL: none) */
+#define DTWIN (dto_in ? dto_in : win)
+/* A film behind, drawn into the window to fit it (0.1.6: "films that fit the window", below). */
+static struct Library *OpenRTGBase;
+static struct Screen *film_scr;
+static struct Window *film_win;
+static struct OpenRTGBitMapInfo film_bi;    /* the screen behind's bitmap */
+static LONG film_w, film_h;                 /* the film's size there */
+static LONG film_top;                       /* its first row on that screen (below the screen's bar) */
+#define FILM_GAP 32                         /* rows above the film in its window (see open_film_screen) */
+static LONG film_frame = -1;                /* the frame last drawn into the window */
+static int film_again;                      /* draw once more on the next tick */
+static struct MsgPort *tick_port;           /* timer.device: OpenPlay looks for a new frame */
+static struct timerequest *tick_req;
+static int tick_out;
+static void film_present(void);
 static int kind, playing, frames, frame, fps, slide_ticks, hover = -1, pending_play, pending_ticks;
 static ULONG pic_w, pic_h, snd_len, snd_rate;
 static char dt_name[48], dt_base[32], status[200], opened_in[24], win_title[PATH_LEN + 16];
@@ -857,7 +876,7 @@ static void draw_media_back(void)
     ogt_frame(rp, pen("string.shadow"), media_box.x - 1, media_box.y - 1, media_box.w + 2, media_box.h + 2);
     if (dto) {
         /* a picture smaller than the box sits in its middle on black */
-        if (kind == K_PICTURE) { ogt_rgb black0 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black0), media_box.x, media_box.y, media_box.w, media_box.h); }
+        if (kind == K_PICTURE || (kind == K_VIDEO && film_win)) { ogt_rgb black0 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black0), media_box.x, media_box.y, media_box.w, media_box.h); }
         if (kind == K_SOUND && snd_left && (show_scope || show_overview)) { ogt_rgb black1 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black1), media_box.x, media_box.y, media_box.w, media_box.h); draw_sound_views(); }
         return;
     }
@@ -920,7 +939,8 @@ static void draw_all(void)
     draw_status();
     if (glist) RefreshGList(glist, win, NULL, -1);
     GT_RefreshWindow(win, NULL);
-    if (dto) RefreshDTObjects(dto, win, NULL, TAG_DONE);
+    if (dto && dto_in == win) RefreshDTObjects(dto, win, NULL, TAG_DONE);
+    else if (dto && dto_in == film_win) film_present();
 }
 
 /* ---- a film starting ---- */
@@ -968,13 +988,242 @@ static void film_settle(void)
     play_dto = NULL;                        /* started: it may leave at any time now */
 }
 
+/* ---- films that fit the window (0.1.6) ----
+ *
+ * The user, 12 October 2026: films fit the window too, the way of "a hidden screen", and "use opengpu
+ * to do the leg work". A film plays on a screen of its own kept behind (the window's screen's mode
+ * and depth, so its pixels are in the window's format), in a borderless window there that shares
+ * OpenPlay's message port. Whenever the film shows a new frame, OpenPlay draws that screen's picture
+ * into its own window at the place Fit, Actual size or Fill gives, with ORTG_WritePixels at another
+ * size. openrtg.library 0.16 draws that with OpenGPU's COMPOSITE, one visible piece of the window at
+ * a time: on AmigaChrome the host scales the frame, and the 68k touches none of its pixels.
+ *
+ * A film plays in the window at its own size, as before, without openrtg.library 0.16, on an 8-bit
+ * screen, when the screen behind can't open, or when OpenGPU would scale on this Amiga's own CPU (no
+ * board that draws: every frame's pixels through the 68k would cost more than the film). */
+
+static void tick_start(void)
+{
+    LONG rate;
+    if (!tick_req || tick_out || !film_win) return;
+    rate = fps > 0 ? 2 * fps : 50;          /* twice a frame: drawn when the frame changes, and once after */
+    if (rate > 60) rate = 60;
+    if (rate < 10) rate = 10;
+    tick_req->tr_node.io_Command = TR_ADDREQUEST;
+    tick_req->tr_time.tv_secs = 0;
+    tick_req->tr_time.tv_micro = 1000000UL / (ULONG)rate;
+    SendIO((struct IORequest *)tick_req);
+    tick_out = 1;
+}
+
+static void tick_stop(void)
+{
+    if (!tick_out) return;
+    AbortIO((struct IORequest *)tick_req);
+    WaitIO((struct IORequest *)tick_req);
+    tick_out = 0;
+}
+
+/* Whether films can go behind: openrtg.library 0.16 drawing the window's screen at 16 or 32 bits, and
+ * OpenGPU's COMPOSITE into that format answered by a back end other than the CPU (openrtg.library
+ * draws a 32-bit screen as XRGB32, or as ARGB32 with its top byte cleared after: either way ARGB32's
+ * answer says whether the board does it). */
+static int film_route(struct OpenRTGBitMapInfo *wbi)
+{
+    struct Library *gpu;
+    int hw = 0;
+    if (!OpenRTGBase || !win) return 0;
+    if (OpenRTGBase->lib_Version == 0 && OpenRTGBase->lib_Revision < OP_RTG_SCALE_REVISION) return 0;
+    if (!OP_ORTG_BitMapInfo(OpenRTGBase, win->WScreen->RastPort.BitMap, wbi)) return 0;
+    if (wbi->depth != 16 && wbi->depth != 32) return 0;
+    if ((gpu = OpenLibrary((CONST_STRPTR)"opengpu.library", 0))) {
+        ULONG q = OP_OGPU_Query(gpu, 0x0020, wbi->depth == 16 ? 2 : 3);  /* COMPOSITE; RGB565 or ARGB32 */
+        hw = (q & 0xFF) != 0 && ((q >> 8) & 0xFF) != 0;
+        CloseLibrary(gpu);
+    }
+    if (!hw) dbg("film: OpenGPU would scale on the CPU here; in the window at its own size");
+    return hw;
+}
+
+/* The screen behind and its window, for a film of w x h; 0 when it can't be (the film then plays in
+ * the window, as before). */
+static int open_film_screen(LONG w, LONG h)
+{
+    struct OpenRTGBitMapInfo wbi;
+    struct Screen *ws;
+    if (film_win) return 1;
+    if (w <= 0 || h <= 0 || !film_route(&wbi)) return 0;
+    ws = win->WScreen;
+    /* The film's own size, in a mode of the window's monitor and depth: a screen the size of Workbench
+     * may not fit in the board's video RAM beside Workbench's (1920 x 1080 at 32 bits is 8 MiB). */
+    {
+        ULONG id = OP_ORTG_BestMode(OpenRTGBase, (ULONG)wbi.monitor, (ULONG)w, (ULONG)h, (ULONG)wbi.depth);
+        /* room above the film for the screen's bar: the film goes at the bottom, well clear of it (in
+         * the lab on 12 October 2026 the bar's look was painted 28 rows deep behind the window, over
+         * the top of the film, though BarLayer ended at row 10) */
+        ULONG bar = 2 * ((ULONG)ws->BarHeight + 1) + 16;
+        if (id && id != INVALID_ID)
+            film_scr = OpenScreenTags(NULL, SA_DisplayID, id, SA_Width, (ULONG)w, SA_Height, (ULONG)(h + FILM_GAP) + bar, SA_Depth, (ULONG)wbi.depth,
+                                      SA_Title, (ULONG)"OpenPlay film", SA_ShowTitle, FALSE, SA_Quiet, TRUE, SA_Behind, TRUE,
+                                      SA_Draggable, FALSE, SA_Type, CUSTOMSCREEN, TAG_DONE);
+    }
+    if (!film_scr) { dbg("film screen: none"); return 0; }
+    dbg("film screen: mode %08lx, %ld x %ld (the window's screen: mode %08lx)", (unsigned long)GetVPModeID(&film_scr->ViewPort),
+        (long)film_scr->Width, (long)film_scr->Height, (unsigned long)GetVPModeID(&ws->ViewPort));
+    if (!OP_ORTG_BitMapInfo(OpenRTGBase, film_scr->RastPort.BitMap, &film_bi) || film_bi.depth != wbi.depth || !film_bi.memory) {
+        dbg("film screen: not the window's format (%d-bit at %08lx, monitor %d; the window's %d-bit, monitor %d)", (int)film_bi.depth,
+            (unsigned long)film_bi.memory, (int)film_bi.monitor, (int)wbi.depth, (int)wbi.monitor);
+        CloseScreen(film_scr);
+        film_scr = NULL;
+        return 0;
+    }
+    film_top = film_scr->Height - h;           /* the film's first row on the screen */
+    if (film_top < 0) film_top = 0;
+    /* The window starts FILM_GAP rows above the film: animation.datatype 47 draws a dark strip about
+     * 200 x 16 at its window's top left (in the window it shows over OpenPlay's title bar), and here it
+     * falls in that gap rather than on the film. */
+    film_win = OpenWindowTags(NULL, WA_CustomScreen, (ULONG)film_scr, WA_Left, 0, WA_Top, film_top - FILM_GAP,
+                              WA_Width, film_scr->Width, WA_Height, h + FILM_GAP,
+                              WA_Borderless, TRUE, WA_Backdrop, TRUE, WA_RMBTrap, TRUE, WA_Activate, FALSE,
+                              WA_SmartRefresh, TRUE, WA_IDCMP, 0, TAG_DONE);
+    if (!film_win) {
+        CloseScreen(film_scr);
+        film_scr = NULL;
+        return 0;
+    }
+    ShowTitle(film_scr, FALSE);             /* the bar behind the window, too */
+    /* animation.datatype draws no frames on a screen whose viewport is hidden (VP_HIDE), which Intuition
+     * sets on a screen behind: measured in the lab on 12 October 2026, the frames advanced and the screen
+     * behind kept its first picture. OpenRTG shows only the front screen on the board, so on this screen
+     * the flag hides nothing; OpenPlay clears it, and again on each tick. */
+    film_scr->ViewPort.Modes &= ~VP_HIDE;
+    /* the object's news come to OpenPlay's own port */
+    film_win->UserPort = win->UserPort;
+    ModifyIDCMP(film_win, IDCMP_IDCMPUPDATE);
+    film_w = w;
+    film_h = h;
+    film_frame = -1;
+    film_again = 1;
+    dbg("film screen %ld x %ld, %d-bit, film %ld x %ld from row %ld", (long)film_scr->Width, (long)film_scr->Height,
+        (int)film_bi.depth, (long)film_w, (long)film_h, (long)film_top);
+    tick_start();
+    return 1;
+}
+
+static void close_film_screen(void)
+{
+    tick_stop();
+    if (film_win) {
+        struct Node *n, *next;
+        /* the window shares OpenPlay's port: its messages go back before it closes */
+        Forbid();
+        if (win)
+            for (n = win->UserPort->mp_MsgList.lh_Head; (next = n->ln_Succ); n = next)
+                if (((struct IntuiMessage *)n)->IDCMPWindow == film_win) {
+                    Remove(n);
+                    ReplyMsg((struct Message *)n);
+                }
+        film_win->UserPort = NULL;
+        ModifyIDCMP(film_win, 0);
+        Permit();
+        CloseWindow(film_win);
+        film_win = NULL;
+    }
+    if (film_scr) { CloseScreen(film_scr); film_scr = NULL; }
+    film_w = film_h = film_top = 0;
+}
+
+/* The film's rectangle on the screen behind and where it goes in the media box, as view_mode says:
+ * scaled to fit with its shape kept, at its own size in the middle (its middle when it is bigger),
+ * or scaled to fill with its sides or its top and bottom cut. */
+static void film_rects(LONG *sx, LONG *sy, LONG *sw, LONG *sh, LONG *dx, LONG *dy, LONG *dw, LONG *dh)
+{
+    LONG fw = film_w, fh = film_h, bw = media_box.w, bh = media_box.h;
+    *sx = *sy = 0; *sw = fw; *sh = fh;
+    if (view_mode != VIEW_ONE && fw > 0 && fh > 0 && bw > 0 && bh > 0) {
+        unsigned long long rw = ((unsigned long long)bw << 16) / (unsigned long long)fw;
+        unsigned long long rh = ((unsigned long long)bh << 16) / (unsigned long long)fh;
+        unsigned long long r = view_mode == VIEW_FIT ? (rw < rh ? rw : rh) : (rw > rh ? rw : rh);
+        LONG tw = (LONG)(((unsigned long long)fw * r) >> 16), th = (LONG)(((unsigned long long)fh * r) >> 16);
+        if (tw < 1) tw = 1;
+        if (th < 1) th = 1;
+        if (tw > bw) { *sw = (LONG)(((unsigned long long)bw << 16) / r); if (*sw > fw) *sw = fw; if (*sw < 1) *sw = 1; *sx = (fw - *sw) / 2; tw = bw; }
+        if (th > bh) { *sh = (LONG)(((unsigned long long)bh << 16) / r); if (*sh > fh) *sh = fh; if (*sh < 1) *sh = 1; *sy = (fh - *sh) / 2; th = bh; }
+        *dw = tw; *dh = th;
+        *dx = media_box.x + (bw - tw) / 2;
+        *dy = media_box.y + (bh - th) / 2;
+        return;
+    }
+    if (fw > bw) { *sx = (fw - bw) / 2; *sw = bw; }
+    if (fh > bh) { *sy = (fh - bh) / 2; *sh = bh; }
+    *dw = *sw; *dh = *sh;
+    *dx = media_box.x + (bw - *dw) / 2;
+    *dy = media_box.y + (bh - *dh) / 2;
+}
+
+/* The screen behind's picture into the window: one ORTG_WritePixels, at another size unless Actual
+ * size. A 32-bit screen's pixels are 0RGB; a 16-bit one's go as they are (RAW). */
+static void film_present(void)
+{
+    struct OpenRTGPixels px;
+    LONG sx, sy, sw, sh, dx, dy, dw, dh;
+    if (!film_win || dto_in != film_win || !win || film_w <= 0 || film_h <= 0) return;
+    /* where the screen behind's pixels are now: OpenRTG may move a bitmap (asked each time) */
+    if (!OP_ORTG_BitMapInfo(OpenRTGBase, film_scr->RastPort.BitMap, &film_bi) || !film_bi.memory) return;
+    film_rects(&sx, &sy, &sw, &sh, &dx, &dy, &dw, &dh);
+    if (sw <= 0 || sh <= 0 || dw <= 0 || dh <= 0) return;
+    memset(&px, 0, sizeof px);
+    px.data = film_bi.memory;
+    px.x = sx;
+    px.y = film_top + sy;
+    px.modulo = (long)film_bi.bytes_per_row;
+    px.format = film_bi.depth == 32 ? ORTG_PIX_0RGB : ORTG_PIX_RAW;
+    px.width = sw;
+    px.height = sh;
+    px.dest_width = dw;
+    px.dest_height = dh;
+    OP_ORTG_WritePixels(OpenRTGBase, win->RPort, dx, dy, &px);
+}
+
+/* A tick: draw the frame when the film has moved on, and once more on the tick after (the frame
+ * may still have been drawing on the screen behind). */
+static void film_tick(void)
+{
+    ULONG f = 0;
+    if (!film_win || !dto) return;
+    if (film_scr->ViewPort.Modes & VP_HIDE) {
+        dbg("film screen hidden again at frame %ld", (long)film_frame);
+        film_scr->ViewPort.Modes &= ~VP_HIDE; /* each tick: Intuition sets it again as screens move */
+    }
+    if (GetDTAttrs(dto, ADTA_Frame, (ULONG)&f, TAG_DONE) && (LONG)f != film_frame) {
+        film_frame = (LONG)f;
+        film_present();
+        film_again = 1;
+        if (debug_on > 0 && !(f % 25)) {
+            /* what the screen behind holds: a sum of the film's pixels, which changes as it plays */
+            ULONG sum = 0;
+            LONG i, j;
+            if (film_bi.depth == 32)
+                for (j = 0; j < film_h; j++) {
+                    const ULONG *row = (const ULONG *)((const UBYTE *)film_bi.memory + (film_top + j) * film_bi.bytes_per_row);
+                    for (i = 0; i < film_w; i++) sum = sum * 31 + row[i];
+                }
+            dbg("present frame %lu, film sum %08lx", (unsigned long)f, (unsigned long)sum);
+        }
+    } else if (film_again) {
+        film_present();
+        film_again = 0;
+    }
+}
+
 /* ---- layout ---- */
 
 static void remove_gadgets(void)
 {
-    if (dto) {
+    if (dto && dto_in == win) {             /* a film on the screen behind stays there */
         film_settle();
         RemoveDTObject(win, dto);
+        dto_in = NULL;
     }
     if (glist) {
         RemoveGList(win, glist, -1);
@@ -1023,8 +1272,19 @@ static void size_dto(int bx, int by, int bw, int bh, int mode)
 static void place_dto(void)
 {
     if (!dto) return;
+    if (film_win) {
+        /* a film behind: there at its own size, once; only where it is drawn in the window changes */
+        if (dto_in != film_win) {
+            SetAttrs(dto, GA_Left, 0, GA_Top, FILM_GAP, GA_Width, film_w, GA_Height, film_h, TAG_DONE);
+            AddDTObject(film_win, NULL, dto, -1);
+            dto_in = film_win;
+        }
+        film_again = 1;
+        return;
+    }
     size_dto(media_box.x, media_box.y, media_box.w, media_box.h, view_mode);
     AddDTObject(win, NULL, dto, -1);
+    dto_in = win;
 }
 
 static void layout(void)
@@ -1101,11 +1361,13 @@ static void close_media(void)
 {
     if (dto) {
         film_settle();
-        DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
-        RemoveDTObject(win, dto);
+        DoDTMethod(dto, DTWIN, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
+        if (dto_in) RemoveDTObject(dto_in, dto);
+        dto_in = NULL;
         DisposeDTObject(dto);
         dto = NULL;
     }
+    close_film_screen();
     play_dto = NULL;
     kind = K_UNKNOWN;
     playing = pending_play = 0;
@@ -1161,6 +1423,12 @@ static void describe(void)
         snprintf(what, sizeof what, "%lu x %lu, shown at %lu x %lu (%s)", (unsigned long)pic_w, (unsigned long)pic_h,
                  (unsigned long)scaled_w, (unsigned long)scaled_h, view_word[view_mode]);
     else if (kind == K_PICTURE && pic_w) snprintf(what, sizeof what, "%lu x %lu", (unsigned long)pic_w, (unsigned long)pic_h);
+    else if (kind == K_VIDEO && film_win) {
+        LONG sx, sy, sw, sh, dx, dy, dw, dh;
+        film_rects(&sx, &sy, &sw, &sh, &dx, &dy, &dw, &dh);
+        snprintf(what, sizeof what, "%ld x %ld, shown at %ld x %ld (%s)", (long)film_w, (long)film_h,
+                      (long)(sw == film_w ? dw : dw * film_w / sw), (long)(sh == film_h ? dh : dh * film_h / sh), view_word[view_mode]);
+    }
     else if (kind == K_VIDEO && frames) snprintf(what, sizeof what, "%d frames, %d a second", frames, fps);
     else if (kind == K_SOUND && snd_rate) snprintf(what, sizeof what, "%lu Hz", (unsigned long)snd_rate);
     snprintf(status, sizeof status, "%s.datatype%s%s  -  %s  -  decoded by %s  -  opened in %s",
@@ -1224,8 +1492,12 @@ static void show_item(int i, int play)
         if (GetDTAttrs(dto, PDTA_BitMapHeader, (ULONG)&bmh, TAG_DONE) && bmh) { pic_w = bmh->bmh_Width; pic_h = bmh->bmh_Height; }
     } else if (kind == K_VIDEO) {
         ULONG n = 0, f = 0;
+        ULONG aw = 0, ah = 0;
         GetDTAttrs(dto, ADTA_Frames, (ULONG)&n, ADTA_FramesPerSecond, (ULONG)&f, TAG_DONE);
         frames = (int)n; fps = (int)f;
+        GetDTAttrs(dto, ADTA_Width, (ULONG)&aw, ADTA_Height, (ULONG)&ah, TAG_DONE);
+        dbg("film %lu x %lu", (unsigned long)aw, (unsigned long)ah);
+        open_film_screen((LONG)aw, (LONG)ah);   /* behind, to fit the window; else in the window as before */
     } else if (kind == K_SOUND) {
         ULONG len = 0, rate = 0, period = 0;
         GetDTAttrs(dto, SDTA_SampleLength, (ULONG)&len, SDTA_Period, (ULONG)&period, TAG_DONE);
@@ -1291,8 +1563,8 @@ static void play_pause(void)
     }
     if (kind == K_SOUND || kind == K_VIDEO) {
         if (pending_play) pending_play = 0;
-        else if (playing) { DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL); if (kind == K_SOUND) snd_paused(); }
-        else film_play(win);
+        else if (playing) { DoDTMethod(dto, DTWIN, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL); if (kind == K_SOUND) snd_paused(); }
+        else film_play(DTWIN);
         playing = !playing;
     } else if (kind == K_PICTURE) {
         playing = !playing;
@@ -1303,7 +1575,7 @@ static void play_pause(void)
 
 static void stop(void)
 {
-    if (dto && (kind == K_SOUND || kind == K_VIDEO)) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
+    if (dto && (kind == K_SOUND || kind == K_VIDEO)) DoDTMethod(dto, DTWIN, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     playing = 0;
     frame = 0;
     snd_reset();
@@ -1567,10 +1839,11 @@ static void full_screen(void)
     RectFill(fw->RPort, 0, 0, fs->Width - 1, fs->Height - 1);
     /* the object out of the window, sized to the screen, into the full-screen window */
     film_settle();
-    if (kind == K_VIDEO) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
-    RemoveDTObject(win, dto);
+    if (kind == K_VIDEO) DoDTMethod(dto, DTWIN, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
+    if (dto_in) RemoveDTObject(dto_in, dto);
     size_dto(0, 0, fs->Width, fs->Height, VIEW_FIT);
     AddDTObject(fw, NULL, dto, -1);
+    dto_in = fw;
     RefreshDTObjects(dto, fw, NULL, TAG_DONE);
     if (kind == K_VIDEO) film_play(fw);
     while (!done) {
@@ -1594,6 +1867,7 @@ static void full_screen(void)
     film_settle();
     if (kind == K_VIDEO) DoDTMethod(dto, fw, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     RemoveDTObject(fw, dto);
+    dto_in = NULL;
     {   /* any message the object sent to the full-screen window before it was removed */
         struct IntuiMessage *m;
         while ((m = (struct IntuiMessage *)GetMsg(fw->UserPort))) ReplyMsg((struct Message *)m);
@@ -1602,7 +1876,8 @@ static void full_screen(void)
     CloseWindow(fw);
     CloseScreen(fs);
     place_dto();
-    RefreshDTObjects(dto, win, NULL, TAG_DONE);
+    if (dto_in == win) RefreshDTObjects(dto, win, NULL, TAG_DONE);
+    else film_present();
     playing = 0;
     (void)was_playing;
     draw_tools();
@@ -1805,7 +2080,7 @@ static int command(int c)
     case C_STOP: stop(); break;
     case C_REPEAT:
         repeat_on = !repeat_on;
-        if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, win, NULL, DTA_Repeat, (ULONG)repeat_on, TAG_DONE);
+        if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, DTWIN, NULL, DTA_Repeat, (ULONG)repeat_on, TAG_DONE);
         set_menu_checks();
         draw_tools();
         break;
@@ -1841,7 +2116,7 @@ static int command(int c)
 static void set_volume(int v)
 {
     volume = v < 0 ? 0 : v > 64 ? 64 : v;
-    if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, win, NULL, SDTA_Volume, (ULONG)volume, TAG_DONE);
+    if (dto && (kind == K_SOUND || kind == K_VIDEO)) SetDTAttrs(dto, DTWIN, NULL, SDTA_Volume, (ULONG)volume, TAG_DONE);
     draw_seek();
 }
 
@@ -1872,12 +2147,13 @@ static void dt_update(struct TagItem *tags)
         switch (ti->ti_Tag) {
         case DTA_Sync:
             dbg("sync");
-            RefreshDTObjects(dto, win, NULL, TAG_DONE);
+            RefreshDTObjects(dto, DTWIN, NULL, TAG_DONE);
             dbg("refreshed");
+            film_again = 1;
             if (pending_play) {
                 pending_play = 0;
                 dbg("play on sync");
-                film_play(win);
+                film_play(DTWIN);
                 dbg("playing");
             }
             break;
@@ -1925,7 +2201,7 @@ static int main_event(struct IntuiMessage *m)
     case IDCMP_INTUITICKS:
         if (pending_play && dto && ++pending_ticks >= 10) {
             pending_play = 0;
-            film_play(win);
+            film_play(DTWIN);
         }
         /* animation.datatype 47 doesn't always say which frame it is on:
          * ask it, so the slider and the buttons follow the film */
@@ -1965,7 +2241,7 @@ static int main_event(struct IntuiMessage *m)
             } else if (kind == K_VIDEO && dto && frames > 1) {
                 /* seek: ADTA_Frame */
                 frame = at * (frames - 1) / 1000;
-                SetDTAttrs(dto, win, NULL, ADTA_Frame, (ULONG)frame, TAG_DONE);
+                SetDTAttrs(dto, DTWIN, NULL, ADTA_Frame, (ULONG)frame, TAG_DONE);
                 draw_seek();
             }
         }
@@ -2082,6 +2358,13 @@ static int op_main(void)
     IFFParseBase = OpenLibrary((CONST_STRPTR)"iffparse.library", 39);
     IconBase = OpenLibrary((CONST_STRPTR)"icon.library", 39);
     WorkbenchBase = OpenLibrary((CONST_STRPTR)"workbench.library", 39);
+    OpenRTGBase = OpenLibrary((CONST_STRPTR)OP_RTG_NAME, 0);
+    if ((tick_port = CreateMsgPort()) &&
+        (tick_req = (struct timerequest *)CreateIORequest(tick_port, sizeof(struct timerequest))) &&
+        OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ, (struct IORequest *)tick_req, 0) != 0) {
+        DeleteIORequest((struct IORequest *)tick_req);
+        tick_req = NULL;
+    }
     load_prefs();
     load_look();
 
@@ -2100,9 +2383,16 @@ static int op_main(void)
     else set_status("Drop pictures, sounds, films or drawers on the window, or choose Open.");
 
     while (!quit) {
-        ULONG got = Wait((1UL << win->UserPort->mp_SigBit) | SIGBREAKF_CTRL_C | (appport ? 1UL << appport->mp_SigBit : 0));
+        ULONG tick_sig = tick_port ? 1UL << tick_port->mp_SigBit : 0;
+        ULONG got = Wait((1UL << win->UserPort->mp_SigBit) | SIGBREAKF_CTRL_C | (appport ? 1UL << appport->mp_SigBit : 0) | tick_sig);
         struct IntuiMessage *m;
         if (got & SIGBREAKF_CTRL_C) quit = 1;
+        if ((got & tick_sig) && tick_out && CheckIO((struct IORequest *)tick_req)) {
+            WaitIO((struct IORequest *)tick_req);
+            tick_out = 0;
+            film_tick();
+            tick_start();
+        }
         if (appport && (got & (1UL << appport->mp_SigBit))) app_news();
         while (!quit && win && (m = GT_GetIMsg(win->UserPort)))
             quit = main_event(m);
@@ -2117,6 +2407,13 @@ out:
         DeleteMsgPort(appport);
     }
     free(items);
+    if (tick_req) {
+        tick_stop();
+        CloseDevice((struct IORequest *)tick_req);
+        DeleteIORequest((struct IORequest *)tick_req);
+    }
+    if (tick_port) DeleteMsgPort(tick_port);
+    if (OpenRTGBase) CloseLibrary(OpenRTGBase);
     if (theme.text) ogt_theme_free(&theme);
     if (WorkbenchBase) CloseLibrary(WorkbenchBase);
     if (IconBase) CloseLibrary(IconBase);
