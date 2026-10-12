@@ -69,7 +69,7 @@
 #include "op_stack.h"
 #include "op_icons.h"
 
-#define VERSION_TEXT "OpenPlay 0.1.4 (12.10.2026)"
+#define VERSION_TEXT "OpenPlay 0.1.5 (12.10.2026)"
 static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
@@ -96,7 +96,7 @@ static const char fallback_theme[] =
 
 enum { C_OPEN = 1, C_PREV, C_PLAY, C_STOP, C_NEXT, C_REPEAT, C_FULL, C_LIST, C_INFO, C_CDXL,
        C_ADD, C_REMOVE, C_SAVELIST, C_CLEAR, C_ABOUT, C_QUIT, C_OWNSCREEN,
-       C_BT_LOOK, C_BT_BOTH, C_BT_ICONS, C_BT_TEXT, C_FIT, C_ONE, C_FILL };
+       C_BT_LOOK, C_BT_BOTH, C_BT_ICONS, C_BT_TEXT, C_FIT, C_ONE, C_FILL, C_SCOPE, C_OVERVIEW };
 
 /* The toolbar draws the buttons and their names; OpenPlay draws the
  * player icons on them (op_icons) until OpenGadTools has its own. */
@@ -146,6 +146,8 @@ static struct NewMenu newmenus[] = {
     { NM_ITEM, (STRPTR)"Fit to window", (STRPTR)"Z", CHECKIT, (1 << 5) | (1 << 6), (APTR)C_FIT },
     { NM_ITEM, (STRPTR)"Actual size", 0, CHECKIT, (1 << 4) | (1 << 6), (APTR)C_ONE },
     { NM_ITEM, (STRPTR)"Fill window", 0, CHECKIT, (1 << 4) | (1 << 5), (APTR)C_FILL },
+    { NM_ITEM, (STRPTR)"Scope", 0, CHECKIT | MENUTOGGLE, 0, (APTR)C_SCOPE },
+    { NM_ITEM, (STRPTR)"Overview", 0, CHECKIT | MENUTOGGLE, 0, (APTR)C_OVERVIEW },
     { NM_ITEM, (STRPTR)"About this file...", (STRPTR)"I", 0, 0, (APTR)C_INFO },
     { NM_ITEM, NM_BARLABEL, 0, 0, 0, 0 },
     { NM_ITEM, (STRPTR)"Buttons", 0, 0, 0, 0 },
@@ -197,6 +199,18 @@ enum { VIEW_FIT, VIEW_ONE, VIEW_FILL };
 static int view_mode = VIEW_FIT;
 static const char *const view_word[] = { "fit", "actual size", "fill" };
 static ULONG scaled_w, scaled_h;        /* the size PDTM_SCALE last gave the picture (0: not scaled) */
+/* A sound's two views (0.1.5, the user, 12 October 2026: "a sound wave, still playing waveform for music",
+ * both offered): the scope, the samples playing now; the overview, the whole sound's loudness with the
+ * place it has reached. Both from SDTA_Sample (8-bit), SDTA_RightSample for the right of a stereo sound. */
+static int show_scope = 1, show_overview = 1;
+static int snd_bits = 8;                /* SDTA_BitsPerSample: 16 is big-endian words, and SDTA_SampleLength counts bytes */
+static BYTE *snd_left, *snd_right;
+static UBYTE *env;                      /* the overview: the loudest sample in each column, 0 to 128 */
+static int env_w;
+static LONG snd_done;                   /* ticks (1/50 s) played before the last start */
+static struct DateStamp t_snd;          /* the last start */
+static int snd_running;
+static struct { int x, y, w, h; } scope_box, over_box;
 static int win_box[4];              /* the place last remembered */
 
 static struct { int x, y, w, h; } media_box, seek_box, status_box, side_box, head_box, bar_box, vol_box;
@@ -472,6 +486,8 @@ static void load_prefs(void)
     if (read_small("ENV:" PREFS_DIR "/Repeat", buf, sizeof buf)) repeat_on = buf[0] == '1';
     if (read_small("ENV:" PREFS_DIR "/OwnScreen", buf, sizeof buf)) want_own = buf[0] == '1';
     if (read_small("ENV:" PREFS_DIR "/Volume", buf, sizeof buf)) { volume = atoi(buf); if (volume < 0 || volume > 64) volume = 64; }
+    if (read_small("ENV:" PREFS_DIR "/Scope", buf, sizeof buf)) show_scope = buf[0] != '0';
+    if (read_small("ENV:" PREFS_DIR "/Overview", buf, sizeof buf)) show_overview = buf[0] != '0';
     if (read_small("ENV:" PREFS_DIR "/View", buf, sizeof buf))
         view_mode = !strncmp(buf, "1:1", 3) ? VIEW_ONE : !strncmp(buf, "fill", 4) ? VIEW_FILL : VIEW_FIT;
     if (read_small("ENV:" PREFS_DIR "/Window", buf, sizeof buf)) {
@@ -491,6 +507,8 @@ static void save_prefs(void)
     write_small("OwnScreen", want_own ? "1\n" : "0\n");
     snprintf(buf, sizeof buf, "%d\n", volume);
     write_small("Volume", buf);
+    write_small("Scope", show_scope ? "1\n" : "0\n");
+    write_small("Overview", show_overview ? "1\n" : "0\n");
     write_small("View", view_mode == VIEW_ONE ? "1:1\n" : view_mode == VIEW_FILL ? "fill\n" : "fit\n");
     if (win && !own_scr) {
         snprintf(buf, sizeof buf, "%d %d %d %d\n", win->LeftEdge, win->TopEdge, win->Width, win->Height);
@@ -617,6 +635,33 @@ static void set_status(const char *s)
     draw_status();
 }
 
+/* ---- where a sound is: time since it was started, less the pauses ---- */
+
+static LONG ticks_since_ds(const struct DateStamp *a)
+{
+    struct DateStamp now;
+    DateStamp(&now);
+    return (now.ds_Days - a->ds_Days) * 24L * 60 * 3000 + (now.ds_Minute - a->ds_Minute) * 3000L + (now.ds_Tick - a->ds_Tick);
+}
+
+static void snd_started(void) { DateStamp(&t_snd); snd_running = 1; }
+static void snd_paused(void) { if (snd_running) snd_done += ticks_since_ds(&t_snd); snd_running = 0; }
+static void snd_reset(void) { snd_done = 0; snd_running = 0; }
+
+/* The sample playing now (0 when not known), with Repeat going round. */
+static ULONG snd_pos(void)
+{
+    LONG t = snd_done + (snd_running ? ticks_since_ds(&t_snd) : 0);
+    ULONG p;
+    if (!snd_rate || !snd_len || t <= 0) return 0;
+    p = (ULONG)(((unsigned long long)t * snd_rate) / 50);
+    if (p >= snd_len) {
+        if (repeat_on) p %= snd_len;
+        else { p = snd_len; if (snd_running) { snd_paused(); playing = 0; } }
+    }
+    return p;
+}
+
 /* Position: a bar and the times for sound and video; for pictures, where
  * the slideshow is. */
 static void draw_seek(void)
@@ -633,9 +678,15 @@ static void draw_seek(void)
         fmt_time(a, sizeof a, (ULONG)(frame / f));
         fmt_time(b, sizeof b, (ULONG)(frames / f));
         filled = frames > 1 ? frame * 1000 / (frames - 1) : 0;
-    } else if (kind == K_SOUND && snd_rate) {
-        fmt_time(a, sizeof a, 0);
+    } else if (kind == K_SOUND && snd_rate && snd_len) {
+        ULONG p = snd_pos();
+        fmt_time(a, sizeof a, p / snd_rate);
         fmt_time(b, sizeof b, snd_len / snd_rate);
+        filled = (int)(((unsigned long long)p * 1000) / snd_len);
+    } else if (kind == K_SOUND) {
+        /* a module or a stream: no length to show, but the time it has played (0.1.5: a MOD stayed at 0:00) */
+        LONG t = snd_done + (snd_running ? ticks_since_ds(&t_snd) : 0);
+        fmt_time(a, sizeof a, (ULONG)(t > 0 ? t / 50 : 0));
     } else if (kind == K_PICTURE && nitems) {
         snprintf(a, sizeof a, "%d of %d", cur + 1, nitems);
         filled = nitems > 1 ? cur * 1000 / (nitems - 1) : 1000;
@@ -700,6 +751,105 @@ static void draw_side(void)
     if (list) ogt_list_draw(list);
 }
 
+/* ---- a sound's views ---- */
+
+static int smp(const BYTE *d, ULONG i) { return snd_bits == 16 ? ((const WORD *)d)[i] >> 8 : d[i]; }
+
+static void sound_boxes(void)
+{
+    int h = media_box.h, oh = show_scope ? (h / 3 < 24 ? 24 : h / 3) : h;
+    scope_box.w = over_box.w = 0;
+    if (kind != K_SOUND || !snd_left || !snd_len) return;
+    if (show_overview) { over_box.x = media_box.x; over_box.w = media_box.w; over_box.h = oh; over_box.y = media_box.y + h - oh; }
+    if (show_scope) { scope_box.x = media_box.x; scope_box.y = media_box.y; scope_box.w = media_box.w;
+                      scope_box.h = h - (show_overview ? oh + 2 : 0); }
+}
+
+static void make_envelope(void)
+{
+    int c;
+    if (env && env_w == over_box.w) return;
+    if (env) { FreeVec(env); env = NULL; }
+    env_w = 0;
+    if (over_box.w <= 0 || !(env = AllocVec(over_box.w, MEMF_ANY))) return;
+    env_w = over_box.w;
+    for (c = 0; c < env_w; c++) {
+        ULONG a = (ULONG)(((unsigned long long)snd_len * c) / env_w), b = (ULONG)(((unsigned long long)snd_len * (c + 1)) / env_w), i;
+        int peak = 0;
+        for (i = a; i < b; i++) {
+            int v = smp(snd_left, i), r;
+            if (v < 0) v = -v;
+            if (snd_right) { r = smp(snd_right, i); if (r < 0) r = -r; if (r > v) v = r; }
+            if (v > peak) peak = v;
+        }
+        env[c] = (UBYTE)(peak > 128 ? 128 : peak);
+    }
+}
+
+static void draw_overview(void)
+{
+    struct RastPort *rp = win->RPort;
+    ogt_rgb back = {0x10, 0x14, 0x1c}, played = {0x4c, 0xb0, 0xf0}, ahead = {0x40, 0x4c, 0x60}, head = {0xff, 0xff, 0xff};
+    int c, mid, at;
+    ULONG p;
+    if (over_box.w <= 0) return;
+    make_envelope();
+    ogt_box(rp, ogt_pen_rgb(&ctx, back), over_box.x, over_box.y, over_box.w, over_box.h);
+    if (!env) return;
+    p = snd_pos();
+    at = (int)(((unsigned long long)p * env_w) / snd_len);
+    mid = over_box.y + over_box.h / 2;
+    for (c = 0; c < env_w; c++) {
+        int hh = env[c] * (over_box.h / 2 - 1) / 128;
+        ogt_vline(rp, ogt_pen_rgb(&ctx, c < at ? played : ahead), over_box.x + c, mid - hh, 2 * hh + 1);
+    }
+    if (at >= env_w) at = env_w - 1;
+    ogt_vline(rp, ogt_pen_rgb(&ctx, head), over_box.x + at, over_box.y, over_box.h);
+}
+
+/* About 20 ms of the samples at the place playing now, the left in green and the right in blue. */
+static void draw_scope(void)
+{
+    struct RastPort *rp = win->RPort;
+    ogt_rgb back = {0, 0, 0}, left = {0x4c, 0xd8, 0x8c}, right = {0x5a, 0x9c, 0xf0}, axis = {0x30, 0x36, 0x40};
+    ULONG p, n, i;
+    int x, mid, ch;
+    if (scope_box.w <= 0 || scope_box.h < 8) return;
+    ogt_box(rp, ogt_pen_rgb(&ctx, back), scope_box.x, scope_box.y, scope_box.w, scope_box.h);
+    mid = scope_box.y + scope_box.h / 2;
+    ogt_hline(rp, ogt_pen_rgb(&ctx, axis), scope_box.x, mid, scope_box.w);
+    p = snd_pos();
+    n = snd_rate / 50;                          /* 20 ms */
+    if (n < 64) n = 64;
+    if (p >= snd_len) return;
+    if (p + n > snd_len) p = snd_len > n ? snd_len - n : 0;
+    for (ch = 0; ch < (snd_right ? 2 : 1); ch++) {
+        BYTE *d = ch ? snd_right : snd_left;
+        LONG pn = ogt_pen_rgb(&ctx, ch ? right : left);
+        int py = mid;
+        /* each column a line from the last sample's height to this one's: exact colours on RTG (ogt_vline) */
+        for (x = 0; x < scope_box.w; x++) {
+            int y, y0, y1;
+            i = p + (ULONG)(((unsigned long long)n * x) / scope_box.w);
+            if (i >= snd_len) i = snd_len - 1;
+            y = mid - smp(d, i) * (scope_box.h / 2 - 1) / 128;
+            if (x == 0) py = y;
+            y0 = py < y ? py : y;
+            y1 = py < y ? y : py;
+            ogt_vline(rp, pn, scope_box.x + x, y0, y1 - y0 + 1);
+            py = y;
+        }
+    }
+}
+
+static void draw_sound_views(void)
+{
+    if (!win || kind != K_SOUND) return;
+    sound_boxes();
+    draw_scope();
+    draw_overview();
+}
+
 static void draw_media_back(void)
 {
     struct RastPort *rp = win->RPort;
@@ -708,6 +858,7 @@ static void draw_media_back(void)
     if (dto) {
         /* a picture smaller than the box sits in its middle on black */
         if (kind == K_PICTURE) { ogt_rgb black0 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black0), media_box.x, media_box.y, media_box.w, media_box.h); }
+        if (kind == K_SOUND && snd_left && (show_scope || show_overview)) { ogt_rgb black1 = {0, 0, 0}; ogt_box(rp, ogt_pen_rgb(&ctx, black1), media_box.x, media_box.y, media_box.w, media_box.h); draw_sound_views(); }
         return;
     }
     ogt_box(rp, kind == K_SOUND ? pen("list") : ogt_pen_rgb(&ctx, black), media_box.x, media_box.y, media_box.w, media_box.h);
@@ -801,6 +952,7 @@ static void film_play(struct Window *w)
     if (!dto) return;
     DoDTMethod(dto, w, NULL, DTM_TRIGGER, NULL, STM_PLAY, NULL);
     DateStamp(&t_play);
+    if (kind == K_SOUND) snd_started();
     play_dto = kind == K_VIDEO ? dto : NULL;
 }
 
@@ -864,6 +1016,7 @@ static void size_dto(int bx, int by, int bw, int bh, int mode)
         SetAttrs(dto, DTA_TopHoriz, (LONG)tw > bw ? ((LONG)tw - bw) / 2 : 0,
                  DTA_TopVert, (LONG)th > bh ? ((LONG)th - bh) / 2 : 0, TAG_DONE);
     }
+    if (kind == K_SOUND && snd_left && (show_scope || show_overview)) { w = 1; h = 1; }   /* the views are OpenPlay's own */
     SetAttrs(dto, GA_Left, l, GA_Top, t, GA_Width, w, GA_Height, h, TAG_DONE);
 }
 
@@ -959,6 +1112,11 @@ static void close_media(void)
     frames = frame = fps = 0;
     pic_w = pic_h = snd_len = snd_rate = 0;
     scaled_w = scaled_h = 0;
+    snd_left = snd_right = NULL;
+    snd_bits = 8;
+    if (env) { FreeVec(env); env = NULL; }
+    env_w = 0;
+    snd_reset();
     dt_name[0] = dt_base[0] = 0;
 }
 
@@ -1073,7 +1231,21 @@ static void show_item(int i, int play)
         GetDTAttrs(dto, SDTA_SampleLength, (ULONG)&len, SDTA_Period, (ULONG)&period, TAG_DONE);
         if (!GetDTAttrs(dto, SDTA_SamplesPerSec, (ULONG)&rate, TAG_DONE) || !rate)
             rate = period ? 3546895UL / period : 0;
+        {
+            ULONG bits = 8;
+            GetDTAttrs(dto, SDTA_BitsPerSample, (ULONG)&bits, TAG_DONE);
+            snd_bits = bits == 16 ? 16 : 8;
+            if (snd_bits == 16) len /= 2;           /* samples, not bytes (0.1.5: a 16-bit WAV showed twice its length) */
+        }
         snd_len = len; snd_rate = rate;
+        {
+            BYTE *l = NULL, *r = NULL;
+            GetDTAttrs(dto, SDTA_Sample, (ULONG)&l, TAG_DONE);
+            if (!l) GetDTAttrs(dto, SDTA_LeftSample, (ULONG)&l, TAG_DONE);
+            GetDTAttrs(dto, SDTA_RightSample, (ULONG)&r, TAG_DONE);
+            snd_left = l;
+            snd_right = r != l ? r : NULL;
+        }
     }
     dbg("opened kind %d base %s", kind, dt_base);
     if (kind == K_SOUND || kind == K_VIDEO)
@@ -1119,7 +1291,7 @@ static void play_pause(void)
     }
     if (kind == K_SOUND || kind == K_VIDEO) {
         if (pending_play) pending_play = 0;
-        else if (playing) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL);
+        else if (playing) { DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_PAUSE, NULL); if (kind == K_SOUND) snd_paused(); }
         else film_play(win);
         playing = !playing;
     } else if (kind == K_PICTURE) {
@@ -1134,6 +1306,8 @@ static void stop(void)
     if (dto && (kind == K_SOUND || kind == K_VIDEO)) DoDTMethod(dto, win, NULL, DTM_TRIGGER, NULL, STM_STOP, NULL);
     playing = 0;
     frame = 0;
+    snd_reset();
+    draw_sound_views();
     draw_tools();
     draw_seek();
 }
@@ -1470,6 +1644,8 @@ static void set_menu_checks(void)
             if (id == C_LIST) it->Flags = show_list ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             if (id == C_REPEAT) it->Flags = repeat_on ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             if (id == C_OWNSCREEN) it->Flags = own_scr ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
+            if (id == C_SCOPE) it->Flags = show_scope ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
+            if (id == C_OVERVIEW) it->Flags = show_overview ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             if (id == C_FIT || id == C_ONE || id == C_FILL)
                 it->Flags = (id - C_FIT) == view_mode ? (it->Flags | CHECKED) : (it->Flags & ~CHECKED);
             for (sub = it->SubItem; sub; sub = sub->NextItem) {
@@ -1647,6 +1823,11 @@ static int command(int c)
     case C_BT_BOTH: bt_choice = OGT_TB_ICONS_TEXT; set_menu_checks(); relayout_and_draw(); break;
     case C_BT_ICONS: bt_choice = OGT_TB_ICONS; set_menu_checks(); relayout_and_draw(); break;
     case C_BT_TEXT: bt_choice = OGT_TB_TEXT; set_menu_checks(); relayout_and_draw(); break;
+    case C_SCOPE: case C_OVERVIEW:
+        if (c == C_SCOPE) show_scope = !show_scope; else show_overview = !show_overview;
+        set_menu_checks();
+        relayout_and_draw();
+        break;
     case C_FIT: case C_ONE: case C_FILL:
         view_mode = c - C_FIT;
         set_menu_checks();
@@ -1751,6 +1932,10 @@ static int main_event(struct IntuiMessage *m)
         if (playing && !pending_play && kind == K_VIDEO && dto) {
             ULONG f = 0;
             if (GetDTAttrs(dto, ADTA_Frame, (ULONG)&f, TAG_DONE) && at_frame((int)f)) break;
+        }
+        if (kind == K_SOUND && snd_running) {
+            if (show_scope || show_overview) draw_sound_views();
+            draw_seek();
         }
         if (playing && kind == K_PICTURE && ++slide_ticks >= SLIDE_TICKS) {
             slide_ticks = 0;
