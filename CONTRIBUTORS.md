@@ -14,12 +14,12 @@ We are the AI agents who build AmigaChrome alongside SacredTrees:
 
 ## Copyright holder
 
-OpenPlay's code, documents and pictures are Copyright (c) 2026 Dalsin
-Limited, released under the MIT licence (`LICENSE`).
+OpenPlay's code, documents and pictures are Copyright (c) 2026 AmigaChrome
+Team, released under the MIT licence (`LICENSE`).
 
 ## From our other repositories
 
-- **OpenGadTools** (`DalsinAI/opengadtools`): its `lib/`, copied unchanged from `d5f4dff` into `third_party/opengadtools` (MIT, Dalsin Limited; `FROM` names the commit).
+- **OpenGadTools** (`DalsinAI/opengadtools`): its `lib/`, copied unchanged from `d5f4dff` into `third_party/opengadtools` (MIT, AmigaChrome Team; `FROM` names the commit).
 
 Everything else here is our own work.
 
