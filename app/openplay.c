@@ -15,7 +15,7 @@
  *
  *   OpenPlay [FILES ...] [BUTTONS=ICONS|TEXT|BOTH] [OWNSCREEN]
  *
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #include <exec/types.h>
 #include <exec/memory.h>
 #include <exec/execbase.h>
@@ -73,7 +73,7 @@
 #include "op_rtg.h"
 
 #define VERSION_TEXT "OpenPlay 0.1.6 (12.10.2026)"
-static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 Dalsin Limited";
+static const char version[] __attribute__((used)) = "$VER: " VERSION_TEXT " MIT, Copyright (c) 2026 AmigaChrome Team";
 
 struct Library *DataTypesBase, *AslBase, *IFFParseBase, *IconBase, *WorkbenchBase;
 extern struct WBStartup *_WBenchMsg;
@@ -2062,7 +2062,7 @@ static void about(void)
     struct EasyStruct es = { sizeof(struct EasyStruct), 0, (UBYTE *)"About OpenPlay",
         (UBYTE *)VERSION_TEXT "\n\nPlays anything a datatype opens: pictures, sounds,\n"
                  "tunes and films. Formats the Amiga can't decode by\nitself come through the Nursery: the services card\n"
-                 "or a paired Cradle.\n\nMIT, Copyright (c) 2026 Dalsin Limited.\nhttps://github.com/DalsinAI/openamigamediaplayer",
+                 "or a paired Cradle.\n\nMIT, Copyright (c) 2026 AmigaChrome Team.\nhttps://github.com/DalsinAI/openamigamediaplayer",
         (UBYTE *)"Close" };
     EasyRequestArgs(win, &es, NULL, NULL);
 }

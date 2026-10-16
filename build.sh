@@ -3,7 +3,7 @@
 # the OpenGadTools library copied into third_party/opengadtools (its FROM
 # says which commit). 68020 and up, integer maths only.
 #   ./build.sh [OUT_DIR]           (default build/os3)
-# MIT, Copyright (c) 2026 Dalsin Limited.
+# MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 STOVE=${STOVE:-$HOME/AmigaChrome/stoves/os32}
