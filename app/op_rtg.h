@@ -4,7 +4,7 @@
  * 0.16 draws with OpenGPU's COMPOSITE, on the host on AmigaChrome. The same
  * layouts and LVOs as openamigartg's include/openrtg/openrtg.h and
  * include/inline/openrtg.h.
- * MIT, Copyright (c) 2026 Dalsin Limited. */
+ * MIT, Copyright (c) 2026 AmigaChrome Team. */
 #ifndef OP_RTG_H
 #define OP_RTG_H
 

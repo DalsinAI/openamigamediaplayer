@@ -1,6 +1,6 @@
 Short:        Media player for every datatype
 Uploader:     (We fill this in at upload time)
-Author:       Dalsin Limited
+Author:       AmigaChrome Team
 Type:         mus/play
 Version:      0.1.1
 Architecture: m68k-amigaos >= 3.2.0
@@ -28,7 +28,7 @@ screen), and the buttons start as icons only, as in every Open app. A size
 you give the window is kept. View > Buttons still chooses icons and text,
 or text.
 
-Licence: MIT, Copyright (c) 2026 Dalsin Limited. If you build on it, we ask
-that you credit Dalsin Limited and AmigaChrome.
+Licence: MIT, Copyright (c) 2026 AmigaChrome Team. If you build on it, we ask
+that you credit the AmigaChrome Team.
 
 Source: https://github.com/DalsinAI/openamigamediaplayer
