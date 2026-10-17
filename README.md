@@ -40,7 +40,7 @@ openvideo.datatype (openamigaimage).
 It needs the os32 stove (m68k-amigaos-gcc, NDK 3.2). OpenGadTools' library is
 copied into `third_party/opengadtools` (`FROM` says which commit); OpenPlay
 draws its own player icons (`app/op_icons.c`) until OpenGadTools has them.
-68020 and up, integer maths only. OpenUp installs it as a part
+Built for the 68040, integer maths only. OpenUp installs it as a part
 (SYS:Utilities/OpenPlay).
 
 ## Using it
