@@ -20,7 +20,7 @@ With the Open datatypes and a services card or a paired Cradle (the
 Nursery), it plays AVIF, HEIC, JPEG XL, WebP, FLAC, Ogg, MP3 and more. On an
 AGA Amiga, Save CDXL turns a film into a CDXL the chipset plays by itself.
 
-Requires AmigaOS 3.2 and a 68020 or better.
+Requires AmigaOS 3.2 and a 68040.
 
 New in 0.1.1 (10 October 2026): the window first opens at 800 x 600, in
 the middle of the space beside OpenDock (or all of that space on a smaller
