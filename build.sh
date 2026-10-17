@@ -1,7 +1,7 @@
 #!/bin/sh
 # OpenPlay for OS 3.2 with the os32 stove (m68k-amigaos-gcc, NDK 3.2), and
 # the OpenGadTools library copied into third_party/opengadtools (its FROM
-# says which commit). 68020 and up, integer maths only.
+# says which commit). Built for the 68040, integer maths only.
 #   ./build.sh [OUT_DIR]           (default build/os3)
 # MIT, Copyright (c) 2026 AmigaChrome Team.
 set -eu
@@ -11,7 +11,10 @@ OGT="$HERE/third_party/opengadtools"
 CC="$STOVE/prefix/bin/m68k-amigaos-gcc"
 OUT=${1:-$HERE/build/os3}
 mkdir -p "$OUT"
-FLAGS="-noixemul -m68020 -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common -I$HERE/app -I$OGT"
+# Soft float: -m68040 links libnix's soft libm020, not libm881
+# (specs/m68k-soft-m68040.specs: -m68040 alone would link the FPU libm).
+SOFT="-specs=$HERE/specs/m68k-soft-m68040.specs"
+FLAGS="-noixemul -m68040 $SOFT -std=gnu99 -Wall -Werror -O2 -fno-delete-null-pointer-checks -fno-common -I$HERE/app -I$OGT"
 # shellcheck disable=SC2086
 "$CC" $FLAGS -o "$OUT/OpenPlay" \
     "$HERE/app/openplay.c" "$HERE/app/op_icons.c" "$HERE/app/op_stack.c" \
