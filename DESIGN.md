@@ -1,8 +1,7 @@
 # OpenPlay: design
 
 OpenPlay 0.1, 6 October 2026. The mock-ups (draft 2, eight screens, every
-OpenGadTools theme) are at https://claude.ai/artifact/MxJ5abGyH28nNYKPxLHAu3
-(private until shared). The rules are Open Apps Look and Feel.
+OpenGadTools theme) are in the Team's design archive. The rules are Open Apps Look and Feel.
 
 ## 1. What it is
 
