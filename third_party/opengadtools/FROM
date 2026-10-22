@@ -1,3 +1,6 @@
 OpenGadTools lib/, copied unchanged from https://github.com/DalsinAI/opengadtools
 at d5f4dff (main, 6 October 2026). MIT, Copyright (c) 2026 AmigaChrome Team.
 OpenPlay draws its own player icons (app/op_icons.c) until OpenGadTools has them.
+
+ogt_font.c and ogt_openfont.h refreshed from DalsinAI/opengadtools PR #71 (22 October 2026):
+fonts through openfont.library 1.2's OF_OpenTextFont, never diskfont.library.
